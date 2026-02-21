@@ -475,7 +475,7 @@ class GuestAccessQrView(HomeAssistantView):
         qr_payload = f"guest-access://pair?code={pairing_record.pairing_code}"
         try:
             qr = segno.make(qr_payload, error="m")
-            svg_output = io.StringIO()
+            svg_output = io.BytesIO()
             qr.save(svg_output, kind="svg", scale=8, border=2, xmldecl=False)
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Failed to render guest access QR code")
@@ -486,7 +486,7 @@ class GuestAccessQrView(HomeAssistantView):
                 headers=NO_STORE_HEADERS,
             )
         return web.Response(
-            text=svg_output.getvalue(),
+            body=svg_output.getvalue(),
             content_type="image/svg+xml",
             headers=NO_STORE_HEADERS,
         )
