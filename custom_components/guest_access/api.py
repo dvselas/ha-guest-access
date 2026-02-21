@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import io
+import logging
 import time
 import uuid
+from hmac import compare_digest
 from typing import Any
 
 from aiohttp import web
@@ -44,6 +46,8 @@ from .token import (
     TokenNotYetValidError,
     TokenVersionMismatchError,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 NO_STORE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
@@ -457,7 +461,9 @@ class GuestAccessQrView(HomeAssistantView):
                 headers=NO_STORE_HEADERS,
             )
 
-        pairing_record = pairing_store.validate_qr_access(pairing_code, qr_access_token)
+        pairing_record = _resolve_pairing_for_qr(
+            pairing_store, pairing_code, qr_access_token
+        )
         if pairing_record is None:
             return web.Response(
                 text="Invalid or expired qr access token",
@@ -467,9 +473,18 @@ class GuestAccessQrView(HomeAssistantView):
             )
 
         qr_payload = f"guest-access://pair?code={pairing_record.pairing_code}"
-        qr = segno.make(qr_payload, error="m")
-        svg_output = io.StringIO()
-        qr.save(svg_output, kind="svg", scale=8, border=2, xmldecl=False)
+        try:
+            qr = segno.make(qr_payload, error="m")
+            svg_output = io.StringIO()
+            qr.save(svg_output, kind="svg", scale=8, border=2, xmldecl=False)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Failed to render guest access QR code")
+            return web.Response(
+                text="Failed to render QR code",
+                status=500,
+                content_type="text/plain",
+                headers=NO_STORE_HEADERS,
+            )
         return web.Response(
             text=svg_output.getvalue(),
             content_type="image/svg+xml",
@@ -619,6 +634,40 @@ def _unauthorized_token_response(
     if include_success:
         payload["success"] = False
     return view.json(payload, status_code=401)
+
+
+def _resolve_pairing_for_qr(
+    pairing_store: PairingStore, pairing_code: str, qr_access_token: str
+) -> Any | None:
+    """Validate QR access against current store, with backward compatibility."""
+    validate_qr_access = getattr(pairing_store, "validate_qr_access", None)
+    if callable(validate_qr_access):
+        try:
+            return validate_qr_access(pairing_code, qr_access_token)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Failed to validate qr access token")
+            return None
+
+    # Backward compatibility path for older PairingStore objects.
+    get_pairing = getattr(pairing_store, "get_pairing", None)
+    if not callable(get_pairing):
+        return None
+
+    try:
+        pairing_record = get_pairing(pairing_code)
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("Failed to load pairing record for qr endpoint")
+        return None
+
+    if pairing_record is None:
+        return None
+
+    record_qr_access_token = getattr(pairing_record, "qr_access_token", None)
+    if not isinstance(record_qr_access_token, str) or not record_qr_access_token:
+        return None
+    if not compare_digest(record_qr_access_token, qr_access_token):
+        return None
+    return pairing_record
 
 
 async def _emit_guest_access_usage_log(
