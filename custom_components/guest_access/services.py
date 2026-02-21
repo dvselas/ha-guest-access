@@ -46,11 +46,17 @@ SERVICE_REVOKE_ALL_SCHEMA = vol.Schema({})
 
 def async_register_services(hass: HomeAssistant) -> None:
     """Register Guest Access services once per Home Assistant instance."""
+    async def _handle_create_pass(call: ServiceCall) -> ServiceResponse:
+        return await async_handle_create_pass(hass, call)
+
+    async def _handle_revoke_all(call: ServiceCall) -> ServiceResponse:
+        return await async_handle_revoke_all(hass, call)
+
     if not hass.services.has_service(DOMAIN, SERVICE_CREATE_PASS):
         hass.services.async_register(
             DOMAIN,
             SERVICE_CREATE_PASS,
-            lambda call: async_handle_create_pass(hass, call),
+            _handle_create_pass,
             schema=SERVICE_CREATE_PASS_SCHEMA,
             supports_response=SupportsResponse.ONLY,
         )
@@ -59,7 +65,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         hass.services.async_register(
             DOMAIN,
             SERVICE_REVOKE_ALL,
-            lambda call: async_handle_revoke_all(hass, call),
+            _handle_revoke_all,
             schema=SERVICE_REVOKE_ALL_SCHEMA,
             supports_response=SupportsResponse.OPTIONAL,
         )
