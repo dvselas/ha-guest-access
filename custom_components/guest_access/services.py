@@ -105,13 +105,12 @@ async def async_handle_create_pass(
         pass_expires_at=pass_expires_at,
     )
 
-    home_assistant_url = _resolve_home_assistant_url(hass)
+    base_url = _resolve_home_assistant_url(hass)
     pair_query = urlencode(
         {
             "pairing_code": pairing.pairing_code,
             "code": pairing.pairing_code,
-            "home_assistant_url": home_assistant_url,
-            "ha_url": home_assistant_url,
+            "base_url": base_url,
         }
     )
     qr_query = urlencode(
@@ -146,7 +145,7 @@ async def async_handle_create_pass(
         "qr_string": qr_string,
         "qr_image_path": qr_image_path,
         "qr_image_url": qr_image_url,
-        "home_assistant_url": home_assistant_url,
+        "base_url": base_url,
     }
 
 

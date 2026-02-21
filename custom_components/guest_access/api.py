@@ -474,15 +474,14 @@ class GuestAccessQrView(HomeAssistantView):
                 headers=NO_STORE_HEADERS,
             )
 
-        home_assistant_url = _resolve_home_assistant_url_from_request(request, hass)
+        base_url = _resolve_home_assistant_url_from_request(request, hass)
         qr_payload = (
             "guest-access://pair?"
             + urlencode(
                 {
                     "pairing_code": pairing_record.pairing_code,
                     "code": pairing_record.pairing_code,
-                    "home_assistant_url": home_assistant_url,
-                    "ha_url": home_assistant_url,
+                    "base_url": base_url,
                 }
             )
         )
