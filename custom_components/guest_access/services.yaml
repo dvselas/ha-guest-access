@@ -1,0 +1,32 @@
+create_pass:
+  name: Create guest pass
+  description: Generate a short-lived pairing code and QR payload for guest onboarding.
+  fields:
+    entity:
+      name: Entity
+      description: Door or garage entity to control (lock.* for doors, cover.* for garages).
+      required: true
+      selector:
+        entity:
+          domain:
+            - lock
+            - cover
+    allowed_action:
+      name: Allowed action
+      description: Scoped action for the selected entity.
+      required: true
+      selector:
+        select:
+          options:
+            - door.open
+            - garage.open
+    expiration_time:
+      name: Expiration time
+      description: Absolute datetime or relative seconds until pass expiration.
+      required: true
+      selector:
+        text:
+
+revoke_all:
+  name: Revoke all guest passes
+  description: Emergency revoke that invalidates all issued guest tokens and pairing codes.

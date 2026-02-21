@@ -1,0 +1,27 @@
+{
+  "config": {
+    "abort": {
+      "single_instance_allowed": "Only a single instance is allowed."
+    },
+    "step": {
+      "user": {
+        "title": "Set up Guest Access",
+        "description": "Create the Guest Access integration."
+      }
+    }
+  },
+  "options": {
+    "error": {
+      "invalid_cidr": "CIDR list must contain valid RFC1918 networks only."
+    },
+    "step": {
+      "init": {
+        "title": "Guest Access network policy",
+        "data": {
+          "local_only": "Restrict guest API to local network only",
+          "allowed_cidrs": "Allowed CIDR ranges (RFC1918 only, comma separated)"
+        }
+      }
+    }
+  }
+}
