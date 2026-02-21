@@ -79,7 +79,8 @@ On expiry:
 
 ### QR-Code direkt in Home Assistant anzeigen
 `guest_access.create_pass` liefert jetzt zusätzlich:
-- `qr_image_url` (z. B. `/api/guest_access/qr?code=H5V24N9PZQ&qr_token=...`)
+- `qr_image_url` (bevorzugt absolut über deine `external_url`, sonst relativ)
+- `qr_image_path` (immer relativ, z. B. `/api/guest_access/qr?code=H5V24N9PZQ&qr_token=...`)
 - `qr_string` (deep link für die App)
 
 Wenn `show_qr_notification: true` (Default), erstellt die Integration automatisch eine

@@ -11,6 +11,7 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -109,7 +110,8 @@ async def async_handle_create_pass(
         {"code": pairing.pairing_code, "qr_token": pairing.qr_access_token}
     )
     qr_string = f"guest-access://pair?{pair_query}"
-    qr_image_url = f"/api/guest_access/qr?{qr_query}"
+    qr_image_path = f"/api/guest_access/qr?{qr_query}"
+    qr_image_url = _resolve_public_qr_url(hass, qr_image_path)
 
     if show_qr_notification and hass.services.has_service(
         "persistent_notification", "create"
@@ -122,6 +124,7 @@ async def async_handle_create_pass(
                 "message": (
                     "Scanne den QR-Code mit der Gast-App.\n\n"
                     f"![Guest Access QR]({qr_image_url})\n\n"
+                    f"[QR-Link öffnen]({qr_image_url})\n\n"
                     f"Fallback pairing_code: `{pairing.pairing_code}`\n"
                     f"Pairing expires_at: `{pairing.pairing_expires_at}`"
                 ),
@@ -133,6 +136,7 @@ async def async_handle_create_pass(
     return {
         **pairing.to_dict(),
         "qr_string": qr_string,
+        "qr_image_path": qr_image_path,
         "qr_image_url": qr_image_url,
     }
 
@@ -231,3 +235,15 @@ def _resolve_pass_expiration(hass: HomeAssistant, expiration_value: Any) -> int:
         raise HomeAssistantError("expiration_time must point to a future time")
 
     return pass_expires_at
+
+
+def _resolve_public_qr_url(hass: HomeAssistant, qr_image_path: str) -> str:
+    """Build proxy-safe absolute URL when HA external/internal URL is configured."""
+    try:
+        base_url = get_url(hass, prefer_external=True, allow_internal=False)
+    except NoURLAvailableError:
+        try:
+            base_url = get_url(hass, prefer_external=False)
+        except NoURLAvailableError:
+            return qr_image_path
+    return f"{base_url.rstrip('/')}{qr_image_path}"
