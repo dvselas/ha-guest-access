@@ -81,7 +81,7 @@ On expiry:
 `guest_access.create_pass` liefert jetzt zusätzlich:
 - `qr_image_url` (relativer Pfad innerhalb deiner HA-Instanz)
 - `qr_image_path` (immer relativ, z. B. `/api/guest_access/qr?code=H5V24N9PZQ&qr_token=...`)
-- `qr_string` (deep link für die App)
+- `qr_string` (deep link für die App mit `pairing_code`)
 
 Wenn `show_qr_notification: true` (Default), erstellt die Integration automatisch eine
 `persistent_notification` mit QR-Link und Fallback-Code.

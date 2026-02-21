@@ -8,6 +8,7 @@ import time
 import uuid
 from hmac import compare_digest
 from typing import Any
+from urllib.parse import urlencode
 
 from aiohttp import web
 import segno
@@ -472,7 +473,15 @@ class GuestAccessQrView(HomeAssistantView):
                 headers=NO_STORE_HEADERS,
             )
 
-        qr_payload = f"guest-access://pair?code={pairing_record.pairing_code}"
+        qr_payload = (
+            "guest-access://pair?"
+            + urlencode(
+                {
+                    "pairing_code": pairing_record.pairing_code,
+                    "code": pairing_record.pairing_code,
+                }
+            )
+        )
         try:
             qr = segno.make(qr_payload, error="m")
             svg_output = io.BytesIO()

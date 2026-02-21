@@ -104,7 +104,9 @@ async def async_handle_create_pass(
         pass_expires_at=pass_expires_at,
     )
 
-    pair_query = urlencode({"code": pairing.pairing_code})
+    pair_query = urlencode(
+        {"pairing_code": pairing.pairing_code, "code": pairing.pairing_code}
+    )
     qr_query = urlencode(
         {"code": pairing.pairing_code, "qr_token": pairing.qr_access_token}
     )
