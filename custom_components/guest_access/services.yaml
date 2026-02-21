@@ -26,6 +26,13 @@ create_pass:
       required: true
       selector:
         text:
+    show_qr_notification:
+      name: Show QR notification
+      description: Create a persistent notification in Home Assistant with a QR image link.
+      required: false
+      default: true
+      selector:
+        boolean:
 
 revoke_all:
   name: Revoke all guest passes

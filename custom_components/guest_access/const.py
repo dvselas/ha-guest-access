@@ -12,6 +12,7 @@ CONF_ALLOWED_CIDRS = "allowed_cidrs"
 CONF_TOKEN_VERSION = "token_version"
 CONF_TOKEN_USES = "token_uses"
 CONF_TOKEN_MAX_USES = "token_max_uses"
+CONF_SHOW_QR_NOTIFICATION = "show_qr_notification"
 
 DATA_TOKEN_MANAGER = "token_manager"
 DATA_PAIRING_STORE = "pairing_store"

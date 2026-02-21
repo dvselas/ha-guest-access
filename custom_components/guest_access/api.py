@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import io
 import time
 import uuid
 from typing import Any
 
 from aiohttp import web
+import segno
 
 from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.core import HomeAssistant
@@ -412,6 +414,53 @@ class GuestAccessActionView(HomeAssistantView):
         )
 
 
+class GuestAccessQrView(HomeAssistantView):
+    """Render pairing QR code as SVG image for Home Assistant UI."""
+
+    url = "/api/guest_access/qr"
+    name = "api:guest_access:qr"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        """Return QR image for an active pairing code."""
+        hass: HomeAssistant = request.app[KEY_HASS]
+        domain_data: dict[str, Any] = hass.data.get(DOMAIN, {})
+
+        policy_error = _reject_remote_if_disallowed(request, domain_data)
+        if policy_error is not None:
+            return policy_error
+
+        pairing_code = request.query.get("code", "")
+        if not pairing_code:
+            return web.Response(
+                text="Missing required query parameter: code",
+                status=400,
+                content_type="text/plain",
+            )
+
+        pairing_store = domain_data.get(DATA_PAIRING_STORE)
+        if not isinstance(pairing_store, PairingStore):
+            return web.Response(
+                text="Guest Access pairing store is not initialized",
+                status=503,
+                content_type="text/plain",
+            )
+
+        pairing_record = pairing_store.get_pairing(pairing_code)
+        if pairing_record is None:
+            return web.Response(
+                text="Pairing code is invalid, already used, or expired",
+                status=404,
+                content_type="text/plain",
+            )
+
+        qr_payload = f"guest-access://pair?code={pairing_record.pairing_code}"
+        qr = segno.make(qr_payload, error="m")
+        svg_output = io.StringIO()
+        qr.save(svg_output, kind="svg", scale=8, border=2, xmldecl=False)
+        return web.Response(text=svg_output.getvalue(), content_type="image/svg+xml")
+
+
 def async_register_api(hass: HomeAssistant) -> None:
     """Register Guest Access HTTP API views exactly once."""
     domain_data = hass.data.setdefault(DOMAIN, {})
@@ -421,6 +470,7 @@ def async_register_api(hass: HomeAssistant) -> None:
     hass.http.register_view(GuestAccessPairView)
     hass.http.register_view(GuestAccessTokenValidateView)
     hass.http.register_view(GuestAccessActionView)
+    hass.http.register_view(GuestAccessQrView)
     domain_data[DATA_API_REGISTERED] = True
 
 

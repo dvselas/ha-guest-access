@@ -7,6 +7,8 @@
   "config_flow": true,
   "documentation": "https://github.com/dvselas/ha-guest-access",
   "iot_class": "local_push",
-  "requirements": [],
-  "version": "0.2.0"
+  "requirements": [
+    "segno==1.6.6"
+  ],
+  "version": "0.2.1"
 }

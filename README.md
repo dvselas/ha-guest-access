@@ -77,6 +77,19 @@ On expiry:
 - `guest_access.create_pass`
 - `guest_access.revoke_all`
 
+### QR-Code direkt in Home Assistant anzeigen
+`guest_access.create_pass` liefert jetzt zusätzlich:
+- `qr_image_url` (z. B. `/api/guest_access/qr?code=H5V24N9PZQ`)
+- `qr_string` (deep link für die App)
+
+Wenn `show_qr_notification: true` (Default), erstellt die Integration automatisch eine
+`persistent_notification` mit QR-Link und Fallback-Code.
+
+Manuelle Anzeige:
+1. Service `guest_access.create_pass` in Developer Tools ausführen.
+2. `qr_image_url` aus der Antwort kopieren.
+3. URL im eingeloggten Browser öffnen oder in einem Lovelace `picture`/`markdown` Card nutzen.
+
 ## Audit
 - Event: `guest_access_used`
 - Fields: `guest_id`, `entity`, `timestamp`

@@ -19,6 +19,7 @@ from .const import (
     CONF_ALLOWED_ACTION,
     CONF_ENTITY,
     CONF_EXPIRATION_TIME,
+    CONF_SHOW_QR_NOTIFICATION,
     CONF_SIGNING_KEY,
     CONF_TOKEN_VERSION,
     DATA_CONFIG_ENTRIES,
@@ -38,6 +39,7 @@ SERVICE_CREATE_PASS_SCHEMA = vol.Schema(
         vol.Required(CONF_ENTITY): cv.entity_id,
         vol.Required(CONF_ALLOWED_ACTION): vol.In(ALLOWED_ACTIONS),
         vol.Required(CONF_EXPIRATION_TIME): vol.Any(cv.positive_int, cv.datetime),
+        vol.Optional(CONF_SHOW_QR_NOTIFICATION, default=True): bool,
     }
 )
 
@@ -91,6 +93,7 @@ async def async_handle_create_pass(
     entity_id = call.data[CONF_ENTITY]
     allowed_action = call.data[CONF_ALLOWED_ACTION]
     expiration_time = call.data[CONF_EXPIRATION_TIME]
+    show_qr_notification = bool(call.data[CONF_SHOW_QR_NOTIFICATION])
 
     _validate_entity_action_scope(entity_id, allowed_action)
     pass_expires_at = _resolve_pass_expiration(hass, expiration_time)
@@ -103,10 +106,31 @@ async def async_handle_create_pass(
 
     qr_query = urlencode({"code": pairing.pairing_code})
     qr_string = f"guest-access://pair?{qr_query}"
+    qr_image_url = f"/api/guest_access/qr?{qr_query}"
+
+    if show_qr_notification and hass.services.has_service(
+        "persistent_notification", "create"
+    ):
+        await hass.services.async_call(
+            "persistent_notification",
+            "create",
+            {
+                "title": "Guest Access Pairing",
+                "message": (
+                    "Scanne den QR-Code mit der Gast-App.\n\n"
+                    f"![Guest Access QR]({qr_image_url})\n\n"
+                    f"Fallback pairing_code: `{pairing.pairing_code}`\n"
+                    f"Pairing expires_at: `{pairing.pairing_expires_at}`"
+                ),
+                "notification_id": f"guest_access_pairing_{pairing.pairing_code.lower()}",
+            },
+            blocking=False,
+        )
 
     return {
         **pairing.to_dict(),
         "qr_string": qr_string,
+        "qr_image_url": qr_image_url,
     }
 
 
