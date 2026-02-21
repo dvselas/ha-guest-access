@@ -11,6 +11,7 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -104,8 +105,14 @@ async def async_handle_create_pass(
         pass_expires_at=pass_expires_at,
     )
 
+    home_assistant_url = _resolve_home_assistant_url(hass)
     pair_query = urlencode(
-        {"pairing_code": pairing.pairing_code, "code": pairing.pairing_code}
+        {
+            "pairing_code": pairing.pairing_code,
+            "code": pairing.pairing_code,
+            "home_assistant_url": home_assistant_url,
+            "ha_url": home_assistant_url,
+        }
     )
     qr_query = urlencode(
         {"code": pairing.pairing_code, "qr_token": pairing.qr_access_token}
@@ -139,6 +146,7 @@ async def async_handle_create_pass(
         "qr_string": qr_string,
         "qr_image_path": qr_image_path,
         "qr_image_url": qr_image_url,
+        "home_assistant_url": home_assistant_url,
     }
 
 
@@ -236,3 +244,21 @@ def _resolve_pass_expiration(hass: HomeAssistant, expiration_value: Any) -> int:
         raise HomeAssistantError("expiration_time must point to a future time")
 
     return pass_expires_at
+
+
+def _resolve_home_assistant_url(hass: HomeAssistant) -> str:
+    """Resolve best available base URL for app deep links."""
+    external_url = getattr(hass.config, "external_url", None)
+    if isinstance(external_url, str) and external_url:
+        return external_url.rstrip("/")
+
+    internal_url = getattr(hass.config, "internal_url", None)
+    if isinstance(internal_url, str) and internal_url:
+        return internal_url.rstrip("/")
+
+    for prefer_external in (True, False):
+        try:
+            return str(get_url(hass, prefer_external=prefer_external)).rstrip("/")
+        except (NoURLAvailableError, TypeError):
+            continue
+    return ""

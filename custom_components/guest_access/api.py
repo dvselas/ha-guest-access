@@ -16,6 +16,7 @@ import segno
 from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -473,12 +474,15 @@ class GuestAccessQrView(HomeAssistantView):
                 headers=NO_STORE_HEADERS,
             )
 
+        home_assistant_url = _resolve_home_assistant_url_from_request(request, hass)
         qr_payload = (
             "guest-access://pair?"
             + urlencode(
                 {
                     "pairing_code": pairing_record.pairing_code,
                     "code": pairing_record.pairing_code,
+                    "home_assistant_url": home_assistant_url,
+                    "ha_url": home_assistant_url,
                 }
             )
         )
@@ -677,6 +681,27 @@ def _resolve_pairing_for_qr(
     if not compare_digest(record_qr_access_token, qr_access_token):
         return None
     return pairing_record
+
+
+def _resolve_home_assistant_url_from_request(
+    request: web.Request, hass: HomeAssistant
+) -> str:
+    """Resolve base URL for QR deep links (external URL preferred)."""
+    external_url = getattr(hass.config, "external_url", None)
+    if isinstance(external_url, str) and external_url:
+        return external_url.rstrip("/")
+
+    internal_url = getattr(hass.config, "internal_url", None)
+    if isinstance(internal_url, str) and internal_url:
+        return internal_url.rstrip("/")
+
+    for prefer_external in (True, False):
+        try:
+            return str(get_url(hass, prefer_external=prefer_external)).rstrip("/")
+        except (NoURLAvailableError, TypeError):
+            continue
+
+    return f"{request.scheme}://{request.host}".rstrip("/")
 
 
 async def _emit_guest_access_usage_log(
