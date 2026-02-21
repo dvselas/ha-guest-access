@@ -5,8 +5,8 @@
     "@sel0001d"
   ],
   "config_flow": true,
-  "documentation": "https://example.com/docs/guest_access",
+  "documentation": "https://github.com/dvselas/ha-guest-access",
   "iot_class": "local_push",
   "requirements": [],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

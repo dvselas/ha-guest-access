@@ -8,8 +8,15 @@ import hashlib
 import hmac
 import json
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any
+
+from .const import (
+    DEFAULT_TOKEN_MAX_USES,
+    TOKEN_AUDIENCE,
+    TOKEN_ISSUER,
+)
 
 
 class GuestTokenError(Exception):
@@ -17,11 +24,31 @@ class GuestTokenError(Exception):
 
 
 class InvalidTokenError(GuestTokenError):
-    """Raised when a token is malformed or the signature is invalid."""
+    """Raised when token is malformed or signature is invalid."""
 
 
 class TokenExpiredError(GuestTokenError):
-    """Raised when a token has passed its expiration time."""
+    """Raised when token has passed expiration time."""
+
+
+class TokenNotYetValidError(GuestTokenError):
+    """Raised when token nbf is in the future."""
+
+
+class TokenVersionMismatchError(GuestTokenError):
+    """Raised when token version is older/newer than expected."""
+
+
+class TokenAudienceMismatchError(GuestTokenError):
+    """Raised when token audience does not match expected client."""
+
+
+class TokenIssuerMismatchError(GuestTokenError):
+    """Raised when token issuer does not match integration."""
+
+
+class TokenMaxUsesExceededError(GuestTokenError):
+    """Raised when token has reached its max_uses replay limit."""
 
 
 def _b64url_encode(raw: bytes) -> str:
@@ -39,7 +66,7 @@ def _b64url_decode(encoded: str) -> bytes:
 
 
 def _json_dump(data: dict[str, Any]) -> bytes:
-    """Serialize JSON in a deterministic compact format."""
+    """Serialize JSON in deterministic compact format."""
     return json.dumps(data, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
@@ -52,7 +79,6 @@ def _decode_json_segment(segment: str) -> dict[str, Any]:
 
     if not isinstance(value, dict):
         raise InvalidTokenError("Token payload must be a JSON object")
-
     return value
 
 
@@ -60,19 +86,33 @@ def _decode_json_segment(segment: str) -> dict[str, Any]:
 class GuestTokenPayload:
     """Typed payload for guest access tokens."""
 
+    iss: str
+    aud: str
+    jti: str
     guest_id: str
-    allowed_actions: list[str]
     entity_id: str
+    allowed_action: str
+    iat: int
+    nbf: int
     exp: int
+    max_uses: int
+    token_version: int
     device_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert payload to serializable dictionary."""
         payload: dict[str, Any] = {
+            "iss": self.iss,
+            "aud": self.aud,
+            "jti": self.jti,
             "guest_id": self.guest_id,
-            "allowed_actions": self.allowed_actions,
             "entity_id": self.entity_id,
+            "allowed_action": self.allowed_action,
+            "iat": self.iat,
+            "nbf": self.nbf,
             "exp": self.exp,
+            "max_uses": self.max_uses,
+            "token_version": self.token_version,
         }
         if self.device_id:
             payload["device_id"] = self.device_id
@@ -81,32 +121,60 @@ class GuestTokenPayload:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GuestTokenPayload:
         """Validate and construct payload from dictionary."""
+        iss = data.get("iss")
+        aud = data.get("aud")
+        jti = data.get("jti")
         guest_id = data.get("guest_id")
         entity_id = data.get("entity_id")
+        allowed_action = data.get("allowed_action")
+        iat = data.get("iat")
+        nbf = data.get("nbf")
         exp = data.get("exp")
-        allowed_actions = data.get("allowed_actions")
+        max_uses = data.get("max_uses")
+        token_version = data.get("token_version")
         device_id = data.get("device_id")
 
+        if not isinstance(iss, str) or not iss:
+            raise InvalidTokenError("iss must be a non-empty string")
+        if not isinstance(aud, str) or not aud:
+            raise InvalidTokenError("aud must be a non-empty string")
+        if not isinstance(jti, str) or not jti:
+            raise InvalidTokenError("jti must be a non-empty string")
         if not isinstance(guest_id, str) or not guest_id:
             raise InvalidTokenError("guest_id must be a non-empty string")
         if not isinstance(entity_id, str) or not entity_id:
             raise InvalidTokenError("entity_id must be a non-empty string")
+        if not isinstance(allowed_action, str) or not allowed_action:
+            raise InvalidTokenError("allowed_action must be a non-empty string")
+        if not isinstance(iat, int):
+            raise InvalidTokenError("iat must be an integer Unix timestamp")
+        if not isinstance(nbf, int):
+            raise InvalidTokenError("nbf must be an integer Unix timestamp")
         if not isinstance(exp, int):
             raise InvalidTokenError("exp must be an integer Unix timestamp")
-
-        if not isinstance(allowed_actions, list) or not allowed_actions:
-            raise InvalidTokenError("allowed_actions must be a non-empty list")
-        if any(not isinstance(action, str) or not action for action in allowed_actions):
-            raise InvalidTokenError("allowed_actions must contain non-empty strings")
-
+        if not isinstance(max_uses, int) or max_uses < 1:
+            raise InvalidTokenError("max_uses must be a positive integer")
+        if not isinstance(token_version, int) or token_version < 1:
+            raise InvalidTokenError("token_version must be a positive integer")
+        if nbf < iat:
+            raise InvalidTokenError("nbf must be greater than or equal to iat")
+        if exp <= nbf:
+            raise InvalidTokenError("exp must be greater than nbf")
         if device_id is not None and (not isinstance(device_id, str) or not device_id):
             raise InvalidTokenError("device_id must be a non-empty string when set")
 
         return cls(
+            iss=iss,
+            aud=aud,
+            jti=jti,
             guest_id=guest_id,
-            allowed_actions=allowed_actions,
             entity_id=entity_id,
+            allowed_action=allowed_action,
+            iat=iat,
+            nbf=nbf,
             exp=exp,
+            max_uses=max_uses,
+            token_version=token_version,
             device_id=device_id,
         )
 
@@ -115,14 +183,16 @@ class GuestTokenManager:
     """Issue and verify signed guest access tokens."""
 
     def __init__(self, signing_key: str) -> None:
-        """Create a token manager bound to a signing key."""
+        """Create token manager bound to signing key."""
         if not isinstance(signing_key, str) or not signing_key:
             raise ValueError("signing_key must be a non-empty string")
         self._key = signing_key.encode("utf-8")
 
-    def create_token(self, payload: GuestTokenPayload) -> str:
-        """Create a signed token from payload data."""
-        header_segment = _b64url_encode(_json_dump({"alg": "HS256", "typ": "JWT"}))
+    def create_token(self, payload: GuestTokenPayload, kid: str) -> str:
+        """Create signed JWT-like token from payload."""
+        header_segment = _b64url_encode(
+            _json_dump({"alg": "HS256", "typ": "JWT", "kid": kid})
+        )
         payload_segment = _b64url_encode(_json_dump(payload.to_dict()))
         signing_input = f"{header_segment}.{payload_segment}".encode("ascii")
         signature = hmac.new(self._key, signing_input, hashlib.sha256).digest()
@@ -131,27 +201,52 @@ class GuestTokenManager:
 
     def create_guest_token(
         self,
+        *,
         guest_id: str,
-        allowed_actions: list[str],
         entity_id: str,
-        expires_in_seconds: int,
+        allowed_action: str,
+        expires_at: int,
+        token_version: int,
+        max_uses: int = DEFAULT_TOKEN_MAX_USES,
         device_id: str | None = None,
-    ) -> str:
-        """Create a token with expiration based on current time."""
-        if expires_in_seconds <= 0:
-            raise ValueError("expires_in_seconds must be greater than 0")
+        now_timestamp: int | None = None,
+    ) -> tuple[str, GuestTokenPayload]:
+        """Create token with full hardened payload."""
+        now = int(time.time()) if now_timestamp is None else now_timestamp
+        if expires_at <= now:
+            raise ValueError("expires_at must be in the future")
+        if max_uses < 1:
+            raise ValueError("max_uses must be greater than 0")
+        if token_version < 1:
+            raise ValueError("token_version must be greater than 0")
 
         payload = GuestTokenPayload(
+            iss=TOKEN_ISSUER,
+            aud=TOKEN_AUDIENCE,
+            jti=uuid.uuid4().hex,
             guest_id=guest_id,
-            allowed_actions=allowed_actions,
             entity_id=entity_id,
-            exp=int(time.time()) + expires_in_seconds,
+            allowed_action=allowed_action,
+            iat=now,
+            nbf=now,
+            exp=expires_at,
+            max_uses=max_uses,
+            token_version=token_version,
             device_id=device_id,
         )
-        return self.create_token(payload)
+        token = self.create_token(payload=payload, kid=f"v{token_version}")
+        return token, payload
 
-    def verify_token(self, token: str, now_timestamp: int | None = None) -> GuestTokenPayload:
-        """Verify signature and expiration, then return validated payload."""
+    def verify_token(
+        self,
+        token: str,
+        *,
+        expected_issuer: str = TOKEN_ISSUER,
+        expected_audience: str = TOKEN_AUDIENCE,
+        expected_token_version: int | None = None,
+        now_timestamp: int | None = None,
+    ) -> GuestTokenPayload:
+        """Verify signature and standard claims."""
         if not isinstance(token, str) or not token:
             raise InvalidTokenError("Token must be a non-empty string")
 
@@ -163,18 +258,27 @@ class GuestTokenManager:
         signing_input = f"{header_segment}.{payload_segment}".encode("ascii")
         expected_signature = hmac.new(self._key, signing_input, hashlib.sha256).digest()
         actual_signature = _b64url_decode(signature_segment)
-
         if not hmac.compare_digest(actual_signature, expected_signature):
             raise InvalidTokenError("Token signature is invalid")
 
         header = _decode_json_segment(header_segment)
         if header.get("alg") != "HS256" or header.get("typ") != "JWT":
             raise InvalidTokenError("Unsupported token header")
+        if "kid" not in header or not isinstance(header["kid"], str) or not header["kid"]:
+            raise InvalidTokenError("Token header is missing kid")
 
         payload = GuestTokenPayload.from_dict(_decode_json_segment(payload_segment))
-
         current_timestamp = int(time.time()) if now_timestamp is None else now_timestamp
+
+        if payload.iss != expected_issuer:
+            raise TokenIssuerMismatchError("Token issuer is invalid")
+        if payload.aud != expected_audience:
+            raise TokenAudienceMismatchError("Token audience is invalid")
+        if payload.nbf > current_timestamp:
+            raise TokenNotYetValidError("Token is not valid yet")
         if payload.exp <= current_timestamp:
             raise TokenExpiredError("Token has expired")
+        if expected_token_version is not None and payload.token_version != expected_token_version:
+            raise TokenVersionMismatchError("Token version has been revoked")
 
         return payload

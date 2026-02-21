@@ -16,7 +16,7 @@ from .const import (
     DOMAIN,
 )
 from .network import normalize_allowed_cidrs, parse_allowed_cidrs_text
-from .storage import async_get_or_create_signing_key
+from .storage import async_get_or_create_security_state
 
 
 class GuestAccessConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -29,7 +29,7 @@ class GuestAccessConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
 
-        await async_get_or_create_signing_key(self.hass)
+        await async_get_or_create_security_state(self.hass)
 
         return self.async_create_entry(
             title=DEFAULT_ENTRY_TITLE,

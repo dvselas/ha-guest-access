@@ -17,8 +17,10 @@ from .const import (
     ALLOWED_ACTIONS,
     CONF_ALLOWED_CIDRS,
     CONF_LOCAL_ONLY,
+    CONF_TOKEN_VERSION,
     DEFAULT_ALLOWED_CIDRS,
     DEFAULT_LOCAL_ONLY,
+    DEFAULT_TOKEN_MAX_USES,
     DATA_API_REGISTERED,
     DATA_CONFIG_ENTRIES,
     DATA_PAIRING_STORE,
@@ -28,11 +30,17 @@ from .const import (
 )
 from .network import is_remote_allowed
 from .pairing import PairingStore
+from .storage import async_get_token_use_count, async_record_token_use
 from .token import (
     GuestTokenManager,
     GuestTokenPayload,
     InvalidTokenError,
+    TokenAudienceMismatchError,
     TokenExpiredError,
+    TokenIssuerMismatchError,
+    TokenMaxUsesExceededError,
+    TokenNotYetValidError,
+    TokenVersionMismatchError,
 )
 
 
@@ -54,10 +62,7 @@ class GuestAccessPairView(HomeAssistantView):
             payload = await request.json()
         except ValueError:
             return self.json(
-                {
-                    "error": "invalid_json",
-                    "message": "Request body must be valid JSON",
-                },
+                {"error": "invalid_json", "message": "Request body must be valid JSON"},
                 status_code=400,
             )
 
@@ -91,12 +96,32 @@ class GuestAccessPairView(HomeAssistantView):
                 status_code=503,
             )
 
-        token_manager = _get_token_manager(domain_data)
-        if token_manager is None:
+        entry_data = _get_active_entry_data(domain_data)
+        if entry_data is None:
+            return self.json(
+                {
+                    "error": "integration_not_ready",
+                    "message": "Guest Access entry data is not initialized",
+                },
+                status_code=503,
+            )
+
+        token_manager = entry_data.get(DATA_TOKEN_MANAGER)
+        if not isinstance(token_manager, GuestTokenManager):
             return self.json(
                 {
                     "error": "integration_not_ready",
                     "message": "Guest Access token manager is not initialized",
+                },
+                status_code=503,
+            )
+
+        token_version = entry_data.get(CONF_TOKEN_VERSION)
+        if not isinstance(token_version, int) or token_version < 1:
+            return self.json(
+                {
+                    "error": "integration_not_ready",
+                    "message": "Guest Access token version is not initialized",
                 },
                 status_code=503,
             )
@@ -130,19 +155,22 @@ class GuestAccessPairView(HomeAssistantView):
                 status_code=410,
             )
 
-        payload_model = GuestTokenPayload(
+        guest_token, token_payload = token_manager.create_guest_token(
             guest_id=f"guest_{uuid.uuid4().hex}",
-            allowed_actions=[pairing.allowed_action],
             entity_id=pairing.entity_id,
-            exp=pairing.pass_expires_at,
+            allowed_action=pairing.allowed_action,
+            expires_at=pairing.pass_expires_at,
+            token_version=token_version,
+            max_uses=DEFAULT_TOKEN_MAX_USES,
         )
-        guest_token = token_manager.create_token(payload_model)
 
         return self.json(
             {
                 "guest_token": guest_token,
-                "allowed_actions": [pairing.allowed_action],
-                "expires_at": pairing.pass_expires_at,
+                "allowed_actions": [token_payload.allowed_action],
+                "expires_at": token_payload.exp,
+                "guest_id": token_payload.guest_id,
+                "max_uses": token_payload.max_uses,
             }
         )
 
@@ -165,10 +193,7 @@ class GuestAccessTokenValidateView(HomeAssistantView):
             payload = await request.json()
         except ValueError:
             return self.json(
-                {
-                    "error": "invalid_json",
-                    "message": "Request body must be valid JSON",
-                },
+                {"error": "invalid_json", "message": "Request body must be valid JSON"},
                 status_code=400,
             )
 
@@ -191,33 +216,41 @@ class GuestAccessTokenValidateView(HomeAssistantView):
                 status_code=400,
             )
 
-        token_manager = _get_token_manager(hass.data.get(DOMAIN, {}))
-        if token_manager is None:
+        token_manager, token_version = _resolve_token_context(hass.data.get(DOMAIN, {}))
+        if token_manager is None or token_version is None:
             return self.json(
                 {
                     "error": "integration_not_ready",
-                    "message": "Guest Access token manager is not initialized",
+                    "message": "Guest Access token context is not initialized",
                 },
                 status_code=503,
             )
 
         try:
-            token_payload = token_manager.verify_token(guest_token)
-        except (InvalidTokenError, TokenExpiredError):
-            return self.json(
-                {
-                    "error": "unauthorized",
-                    "message": "Token is invalid, revoked, or expired",
-                },
-                status_code=401,
+            token_payload, use_count = await _verify_guest_token_for_action(
+                hass=hass,
+                token_manager=token_manager,
+                token=guest_token,
+                token_version=token_version,
             )
+        except (
+            InvalidTokenError,
+            TokenExpiredError,
+            TokenNotYetValidError,
+            TokenVersionMismatchError,
+            TokenAudienceMismatchError,
+            TokenIssuerMismatchError,
+            TokenMaxUsesExceededError,
+        ) as err:
+            return _unauthorized_token_response(self, err)
 
         return self.json(
             {
                 "guest_id": token_payload.guest_id,
-                "allowed_actions": token_payload.allowed_actions,
+                "allowed_actions": [token_payload.allowed_action],
                 "entity_id": token_payload.entity_id,
                 "expires_at": token_payload.exp,
+                "remaining_uses": max(token_payload.max_uses - use_count, 0),
             }
         )
 
@@ -246,6 +279,35 @@ class GuestAccessActionView(HomeAssistantView):
                 },
                 status_code=401,
             )
+
+        token_manager, token_version = _resolve_token_context(hass.data.get(DOMAIN, {}))
+        if token_manager is None or token_version is None:
+            return self.json(
+                {
+                    "success": False,
+                    "error": "integration_not_ready",
+                    "message": "Guest Access token context is not initialized",
+                },
+                status_code=503,
+            )
+
+        try:
+            token_payload, use_count = await _verify_guest_token_for_action(
+                hass=hass,
+                token_manager=token_manager,
+                token=bearer_token,
+                token_version=token_version,
+            )
+        except (
+            InvalidTokenError,
+            TokenExpiredError,
+            TokenNotYetValidError,
+            TokenVersionMismatchError,
+            TokenAudienceMismatchError,
+            TokenIssuerMismatchError,
+            TokenMaxUsesExceededError,
+        ) as err:
+            return _unauthorized_token_response(self, err, include_success=True)
 
         try:
             payload = await request.json()
@@ -290,30 +352,7 @@ class GuestAccessActionView(HomeAssistantView):
                 status_code=400,
             )
 
-        token_manager = _get_token_manager(hass.data.get(DOMAIN, {}))
-        if token_manager is None:
-            return self.json(
-                {
-                    "success": False,
-                    "error": "integration_not_ready",
-                    "message": "Guest Access token manager is not initialized",
-                },
-                status_code=503,
-            )
-
-        try:
-            token_payload = token_manager.verify_token(bearer_token)
-        except (InvalidTokenError, TokenExpiredError):
-            return self.json(
-                {
-                    "success": False,
-                    "error": "unauthorized",
-                    "message": "Token is invalid, revoked, or expired",
-                },
-                status_code=401,
-            )
-
-        if action not in token_payload.allowed_actions:
+        if action != token_payload.allowed_action:
             return self.json(
                 {
                     "success": False,
@@ -353,6 +392,7 @@ class GuestAccessActionView(HomeAssistantView):
                 status_code=500,
             )
 
+        new_use_count = await async_record_token_use(hass, token_payload.jti)
         timestamp = dt_util.utcnow().isoformat()
         await _emit_guest_access_usage_log(
             hass,
@@ -366,6 +406,8 @@ class GuestAccessActionView(HomeAssistantView):
                 "success": True,
                 "action": action,
                 "entity_id": entity_id,
+                "remaining_uses": max(token_payload.max_uses - new_use_count, 0),
+                "used_count": new_use_count,
             }
         )
 
@@ -382,16 +424,48 @@ def async_register_api(hass: HomeAssistant) -> None:
     domain_data[DATA_API_REGISTERED] = True
 
 
-def _get_token_manager(domain_data: dict[str, Any]) -> GuestTokenManager | None:
-    """Return any active token manager for the current integration instance."""
+async def _verify_guest_token_for_action(
+    *,
+    hass: HomeAssistant,
+    token_manager: GuestTokenManager,
+    token: str,
+    token_version: int,
+) -> tuple[GuestTokenPayload, int]:
+    """Verify token claims and replay limits for action-like requests."""
+    token_payload = token_manager.verify_token(
+        token,
+        expected_token_version=token_version,
+    )
+    use_count = await async_get_token_use_count(hass, token_payload.jti)
+    if use_count >= token_payload.max_uses:
+        raise TokenMaxUsesExceededError("Token max_uses has been reached")
+    return token_payload, use_count
+
+
+def _resolve_token_context(
+    domain_data: dict[str, Any],
+) -> tuple[GuestTokenManager | None, int | None]:
+    """Get token manager and token version from active integration entry."""
+    entry_data = _get_active_entry_data(domain_data)
+    if entry_data is None:
+        return None, None
+
+    token_manager = entry_data.get(DATA_TOKEN_MANAGER)
+    token_version = entry_data.get(CONF_TOKEN_VERSION)
+    if not isinstance(token_manager, GuestTokenManager):
+        return None, None
+    if not isinstance(token_version, int) or token_version < 1:
+        return None, None
+    return token_manager, token_version
+
+
+def _get_active_entry_data(domain_data: dict[str, Any]) -> dict[str, Any] | None:
+    """Return first active config-entry data block."""
     entry_ids: set[str] = domain_data.get(DATA_CONFIG_ENTRIES, set())
     for entry_id in entry_ids:
         entry_data = domain_data.get(entry_id)
-        if not isinstance(entry_data, dict):
-            continue
-        token_manager = entry_data.get(DATA_TOKEN_MANAGER)
-        if isinstance(token_manager, GuestTokenManager):
-            return token_manager
+        if isinstance(entry_data, dict):
+            return entry_data
     return None
 
 
@@ -404,7 +478,6 @@ def _extract_bearer_token(request: web.Request) -> str | None:
     scheme, _, token = auth_header.partition(" ")
     if scheme.lower() != "bearer" or not token:
         return None
-
     return token.strip() or None
 
 
@@ -425,7 +498,6 @@ def _reject_remote_if_disallowed(
     local_only, allowed_cidrs = _get_network_policy(domain_data)
     if not local_only:
         return None
-
     if is_remote_allowed(request.remote, allowed_cidrs):
         return None
 
@@ -439,19 +511,48 @@ def _reject_remote_if_disallowed(
 
 
 def _get_network_policy(domain_data: dict[str, Any]) -> tuple[bool, list[str]]:
-    """Get effective local-only policy from active config entry data."""
-    entry_ids: set[str] = domain_data.get(DATA_CONFIG_ENTRIES, set())
-    for entry_id in entry_ids:
-        entry_data = domain_data.get(entry_id)
-        if not isinstance(entry_data, dict):
-            continue
-        local_only = bool(entry_data.get(CONF_LOCAL_ONLY, DEFAULT_LOCAL_ONLY))
-        allowed_cidrs = entry_data.get(CONF_ALLOWED_CIDRS, list(DEFAULT_ALLOWED_CIDRS))
-        if isinstance(allowed_cidrs, list):
-            return local_only, allowed_cidrs
-        return local_only, list(DEFAULT_ALLOWED_CIDRS)
+    """Get effective local-only policy from active config-entry data."""
+    entry_data = _get_active_entry_data(domain_data)
+    if entry_data is None:
+        return DEFAULT_LOCAL_ONLY, list(DEFAULT_ALLOWED_CIDRS)
 
-    return DEFAULT_LOCAL_ONLY, list(DEFAULT_ALLOWED_CIDRS)
+    local_only = bool(entry_data.get(CONF_LOCAL_ONLY, DEFAULT_LOCAL_ONLY))
+    allowed_cidrs = entry_data.get(CONF_ALLOWED_CIDRS, list(DEFAULT_ALLOWED_CIDRS))
+    if isinstance(allowed_cidrs, list):
+        return local_only, allowed_cidrs
+    return local_only, list(DEFAULT_ALLOWED_CIDRS)
+
+
+def _unauthorized_token_response(
+    view: HomeAssistantView, err: Exception, include_success: bool = False
+) -> web.Response:
+    """Map token failures to explicit 401 error codes for iOS state handling."""
+    error = "unauthorized"
+    message = "Token is invalid, revoked, or expired"
+
+    if isinstance(err, TokenExpiredError):
+        error = "token_expired"
+        message = "Token has expired"
+    elif isinstance(err, TokenNotYetValidError):
+        error = "token_not_yet_valid"
+        message = "Token is not valid yet"
+    elif isinstance(err, TokenVersionMismatchError):
+        error = "token_revoked"
+        message = "Token has been revoked"
+    elif isinstance(err, TokenAudienceMismatchError):
+        error = "token_audience_invalid"
+        message = "Token audience is invalid"
+    elif isinstance(err, TokenIssuerMismatchError):
+        error = "token_issuer_invalid"
+        message = "Token issuer is invalid"
+    elif isinstance(err, TokenMaxUsesExceededError):
+        error = "token_max_uses_exceeded"
+        message = "Token usage limit exceeded"
+
+    payload: dict[str, Any] = {"error": error, "message": message}
+    if include_success:
+        payload["success"] = False
+    return view.json(payload, status_code=401)
 
 
 async def _emit_guest_access_usage_log(

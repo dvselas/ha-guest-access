@@ -20,6 +20,7 @@ from .const import (
     CONF_ENTITY,
     CONF_EXPIRATION_TIME,
     CONF_SIGNING_KEY,
+    CONF_TOKEN_VERSION,
     DATA_CONFIG_ENTRIES,
     DATA_PAIRING_STORE,
     DATA_TOKEN_MANAGER,
@@ -29,7 +30,7 @@ from .const import (
     EVENT_REVOKE_ALL,
 )
 from .pairing import PairingStore
-from .storage import async_rotate_signing_key
+from .storage import async_increment_token_version, async_rotate_signing_key
 from .token import GuestTokenManager
 
 SERVICE_CREATE_PASS_SCHEMA = vol.Schema(
@@ -114,6 +115,7 @@ async def async_handle_revoke_all(
         raise HomeAssistantError("Guest Access has no active config entries")
 
     new_signing_key = await async_rotate_signing_key(hass)
+    new_token_version = await async_increment_token_version(hass, clear_uses=True)
 
     updated_entries = 0
     for entry_id in list(entry_ids):
@@ -122,6 +124,7 @@ async def async_handle_revoke_all(
             continue
 
         entry_data[CONF_SIGNING_KEY] = new_signing_key
+        entry_data[CONF_TOKEN_VERSION] = new_token_version
         entry_data[DATA_TOKEN_MANAGER] = GuestTokenManager(new_signing_key)
         updated_entries += 1
 
@@ -134,6 +137,7 @@ async def async_handle_revoke_all(
         "revoked_at": dt_util.utcnow().isoformat(),
         "updated_entries": updated_entries,
         "cleared_pairings": cleared_pairings,
+        "token_version": new_token_version,
     }
     hass.bus.async_fire(EVENT_REVOKE_ALL, event_data)
     if hass.services.has_service("logbook", "log"):

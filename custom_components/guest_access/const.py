@@ -9,11 +9,15 @@ CONF_ALLOWED_ACTION = "allowed_action"
 CONF_EXPIRATION_TIME = "expiration_time"
 CONF_LOCAL_ONLY = "local_only"
 CONF_ALLOWED_CIDRS = "allowed_cidrs"
+CONF_TOKEN_VERSION = "token_version"
+CONF_TOKEN_USES = "token_uses"
+CONF_TOKEN_MAX_USES = "token_max_uses"
 
 DATA_TOKEN_MANAGER = "token_manager"
 DATA_PAIRING_STORE = "pairing_store"
 DATA_CONFIG_ENTRIES = "config_entries"
 DATA_API_REGISTERED = "api_registered"
+DATA_STORAGE_LOCK = "storage_lock"
 
 SERVICE_CREATE_PASS = "create_pass"
 SERVICE_REVOKE_ALL = "revoke_all"
@@ -28,6 +32,10 @@ DEFAULT_ALLOWED_CIDRS = (
     "172.16.0.0/12",
     "192.168.0.0/16",
 )
+TOKEN_ISSUER = DOMAIN
+TOKEN_AUDIENCE = "localkey_ios"
+DEFAULT_TOKEN_VERSION = 1
+DEFAULT_TOKEN_MAX_USES = 10
 DEFAULT_ENTRY_TITLE = "Guest Access"
 
 STORAGE_VERSION = 1

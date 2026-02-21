@@ -10,6 +10,7 @@ from .const import (
     CONF_ALLOWED_CIDRS,
     CONF_LOCAL_ONLY,
     CONF_SIGNING_KEY,
+    CONF_TOKEN_VERSION,
     DEFAULT_ALLOWED_CIDRS,
     DEFAULT_LOCAL_ONLY,
     DATA_API_REGISTERED,
@@ -21,7 +22,7 @@ from .const import (
 from .network import normalize_allowed_cidrs
 from .pairing import PairingStore
 from .services import async_register_services, async_unregister_services
-from .storage import async_get_or_create_signing_key
+from .storage import async_get_or_create_security_state
 from .token import GuestTokenManager
 
 GuestAccessConfigEntry = ConfigEntry
@@ -43,7 +44,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: GuestAccessConfigEntry) 
     domain_data.setdefault(DATA_PAIRING_STORE, PairingStore())
     config_entries: set[str] = domain_data.setdefault(DATA_CONFIG_ENTRIES, set())
 
-    signing_key = await async_get_or_create_signing_key(hass)
+    security_state = await async_get_or_create_security_state(hass)
+    signing_key = security_state[CONF_SIGNING_KEY]
+    token_version = security_state[CONF_TOKEN_VERSION]
     local_only = _get_entry_value(entry, CONF_LOCAL_ONLY, DEFAULT_LOCAL_ONLY)
     allowed_cidrs_raw = _get_entry_value(entry, CONF_ALLOWED_CIDRS, DEFAULT_ALLOWED_CIDRS)
     try:
@@ -53,6 +56,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: GuestAccessConfigEntry) 
 
     domain_data[entry.entry_id] = {
         CONF_SIGNING_KEY: signing_key,
+        CONF_TOKEN_VERSION: token_version,
         CONF_LOCAL_ONLY: bool(local_only),
         CONF_ALLOWED_CIDRS: allowed_cidrs,
         DATA_TOKEN_MANAGER: GuestTokenManager(signing_key),
