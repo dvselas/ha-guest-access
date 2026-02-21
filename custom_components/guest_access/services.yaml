@@ -1,6 +1,6 @@
 create_pass:
   name: Create guest pass
-  description: Generate a short-lived pairing code and QR payload for guest onboarding.
+  description: Generate a short-lived pairing code and protected QR payload for guest onboarding.
   fields:
     entity:
       name: Entity

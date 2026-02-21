@@ -45,6 +45,11 @@ from .token import (
     TokenVersionMismatchError,
 )
 
+NO_STORE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+}
+
 
 class GuestAccessPairView(HomeAssistantView):
     """Exchange pairing code for a signed guest token."""
@@ -419,23 +424,28 @@ class GuestAccessQrView(HomeAssistantView):
 
     url = "/api/guest_access/qr"
     name = "api:guest_access:qr"
-    requires_auth = True
+    requires_auth = False
 
     async def get(self, request: web.Request) -> web.Response:
         """Return QR image for an active pairing code."""
         hass: HomeAssistant = request.app[KEY_HASS]
         domain_data: dict[str, Any] = hass.data.get(DOMAIN, {})
 
-        policy_error = _reject_remote_if_disallowed(request, domain_data)
-        if policy_error is not None:
-            return policy_error
-
         pairing_code = request.query.get("code", "")
+        qr_access_token = request.query.get("qr_token", "")
         if not pairing_code:
             return web.Response(
                 text="Missing required query parameter: code",
                 status=400,
                 content_type="text/plain",
+                headers=NO_STORE_HEADERS,
+            )
+        if not qr_access_token:
+            return web.Response(
+                text="Missing required query parameter: qr_token",
+                status=400,
+                content_type="text/plain",
+                headers=NO_STORE_HEADERS,
             )
 
         pairing_store = domain_data.get(DATA_PAIRING_STORE)
@@ -444,21 +454,27 @@ class GuestAccessQrView(HomeAssistantView):
                 text="Guest Access pairing store is not initialized",
                 status=503,
                 content_type="text/plain",
+                headers=NO_STORE_HEADERS,
             )
 
-        pairing_record = pairing_store.get_pairing(pairing_code)
+        pairing_record = pairing_store.validate_qr_access(pairing_code, qr_access_token)
         if pairing_record is None:
             return web.Response(
-                text="Pairing code is invalid, already used, or expired",
-                status=404,
+                text="Invalid or expired qr access token",
+                status=401,
                 content_type="text/plain",
+                headers=NO_STORE_HEADERS,
             )
 
         qr_payload = f"guest-access://pair?code={pairing_record.pairing_code}"
         qr = segno.make(qr_payload, error="m")
         svg_output = io.StringIO()
         qr.save(svg_output, kind="svg", scale=8, border=2, xmldecl=False)
-        return web.Response(text=svg_output.getvalue(), content_type="image/svg+xml")
+        return web.Response(
+            text=svg_output.getvalue(),
+            content_type="image/svg+xml",
+            headers=NO_STORE_HEADERS,
+        )
 
 
 def async_register_api(hass: HomeAssistant) -> None:

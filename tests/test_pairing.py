@@ -36,6 +36,7 @@ def test_expired_pairing_is_rejected() -> None:
     # Force expiry to avoid waiting for TTL.
     store._records[record.pairing_code] = PairingRecord(  # noqa: SLF001
         pairing_code=record.pairing_code,
+        qr_access_token=record.qr_access_token,
         entity_id=record.entity_id,
         allowed_action=record.allowed_action,
         pass_expires_at=record.pass_expires_at,
@@ -46,3 +47,19 @@ def test_expired_pairing_is_rejected() -> None:
 
     assert consumed is None
     assert reason == "expired"
+
+
+def test_qr_access_requires_matching_qr_token() -> None:
+    store = PairingStore()
+    record = store.create_pairing(
+        entity_id="lock.front_door",
+        allowed_action="door.open",
+        pass_expires_at=int(time.time()) + 3600,
+    )
+
+    assert store.validate_qr_access(record.pairing_code, "") is None
+    assert store.validate_qr_access(record.pairing_code, "wrong") is None
+    assert (
+        store.validate_qr_access(record.pairing_code, record.qr_access_token)
+        is not None
+    )

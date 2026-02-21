@@ -104,8 +104,11 @@ async def async_handle_create_pass(
         pass_expires_at=pass_expires_at,
     )
 
-    qr_query = urlencode({"code": pairing.pairing_code})
-    qr_string = f"guest-access://pair?{qr_query}"
+    pair_query = urlencode({"code": pairing.pairing_code})
+    qr_query = urlencode(
+        {"code": pairing.pairing_code, "qr_token": pairing.qr_access_token}
+    )
+    qr_string = f"guest-access://pair?{pair_query}"
     qr_image_url = f"/api/guest_access/qr?{qr_query}"
 
     if show_qr_notification and hass.services.has_service(

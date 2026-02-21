@@ -5,6 +5,7 @@ from __future__ import annotations
 import secrets
 import string
 import time
+from hmac import compare_digest
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,6 +20,7 @@ class PairingRecord:
     """Server-side pairing record referenced by a short-lived code."""
 
     pairing_code: str
+    qr_access_token: str
     entity_id: str
     allowed_action: str
     pass_expires_at: int
@@ -54,6 +56,7 @@ class PairingStore:
         pairing_code = self._generate_unique_code()
         record = PairingRecord(
             pairing_code=pairing_code,
+            qr_access_token=self._generate_qr_access_token(),
             entity_id=entity_id,
             allowed_action=allowed_action,
             pass_expires_at=pass_expires_at,
@@ -91,6 +94,22 @@ class PairingStore:
         self._purge_expired(now_timestamp)
         return record, None
 
+    def validate_qr_access(
+        self, pairing_code: str, qr_access_token: str
+    ) -> PairingRecord | None:
+        """Return active pairing record if code and qr token are both valid."""
+        now_timestamp = int(time.time())
+        self._purge_expired(now_timestamp)
+
+        record = self._records.get(pairing_code)
+        if record is None:
+            return None
+        if not qr_access_token:
+            return None
+        if not compare_digest(record.qr_access_token, qr_access_token):
+            return None
+        return record
+
     def _purge_expired(self, now_timestamp: int) -> None:
         """Delete codes whose pairing lifetime has ended."""
         expired_codes = [
@@ -115,3 +134,7 @@ class PairingStore:
             )
             if pairing_code not in self._records:
                 return pairing_code
+
+    def _generate_qr_access_token(self) -> str:
+        """Generate high-entropy token for unauthenticated QR image retrieval."""
+        return secrets.token_urlsafe(32)
