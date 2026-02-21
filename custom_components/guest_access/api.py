@@ -11,7 +11,6 @@ from typing import Any
 from urllib.parse import urlencode
 
 from aiohttp import web
-import segno
 
 from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.core import HomeAssistant
@@ -485,6 +484,16 @@ class GuestAccessQrView(HomeAssistantView):
                 }
             )
         )
+        try:
+            import segno  # Local import keeps tests independent of optional QR dependency.
+        except ModuleNotFoundError:
+            return web.Response(
+                text="QR rendering dependency is missing",
+                status=503,
+                content_type="text/plain",
+                headers=NO_STORE_HEADERS,
+            )
+
         try:
             qr = segno.make(qr_payload, error="m")
             svg_output = io.BytesIO()
