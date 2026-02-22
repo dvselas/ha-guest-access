@@ -70,3 +70,55 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependency-audit-full-env-info:
+    name: Dependency audit (full CI env, informational)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_ci.txt
+
+      - name: Full dependency audit (informational only)
+        id: pip_audit_full
+        run: |
+          set +e
+          pip-audit > .pip-audit-full-env.txt 2>&1
+          audit_exit_code=$?
+          set -e
+          echo "exit_code=$audit_exit_code" >> "$GITHUB_OUTPUT"
+          echo "pip-audit exit code (informational): $audit_exit_code"
+          exit 0
+
+      - name: Write audit summary
+        if: always()
+        run: |
+          {
+            echo "## Full CI Environment Dependency Audit (Informational)"
+            echo
+            echo "- Status: non-blocking informational report"
+            echo "- pip-audit exit code: \`${{ steps.pip_audit_full.outputs.exit_code }}\`"
+            echo "- Scope: full installed CI test environment (includes HA test harness dependencies)"
+            echo
+            echo "### Report tail"
+            echo '```text'
+            tail -n 120 .pip-audit-full-env.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload full audit report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-full-env-report
+          path: .pip-audit-full-env.txt
+          if-no-files-found: error
