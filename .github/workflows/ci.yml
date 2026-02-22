@@ -92,7 +92,7 @@ jobs:
         id: pip_audit_full
         run: |
           set +e
-          pip-audit > .pip-audit-full-env.txt 2>&1
+          pip-audit > pip-audit-full-env.txt 2>&1
           audit_exit_code=$?
           set -e
           echo "exit_code=$audit_exit_code" >> "$GITHUB_OUTPUT"
@@ -111,7 +111,7 @@ jobs:
             echo
             echo "### Report tail"
             echo '```text'
-            tail -n 120 .pip-audit-full-env.txt
+            tail -n 120 pip-audit-full-env.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -120,5 +120,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pip-audit-full-env-report
-          path: .pip-audit-full-env.txt
+          path: pip-audit-full-env.txt
           if-no-files-found: error
