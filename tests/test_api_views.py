@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from homeassistant.components.http import KEY_HASS
 
 from custom_components.easy_control.api import (
@@ -117,7 +116,11 @@ class _FakeRequest:
         return json.dumps(self._json_payload).encode("utf-8")
 
 
-def _build_domain_data(*, require_action_proof: bool = False, require_device_binding: bool = False) -> dict[str, Any]:
+def _build_domain_data(
+    *,
+    require_action_proof: bool = False,
+    require_device_binding: bool = False,
+) -> dict[str, Any]:
     token_manager = GuestTokenManager("test-signing-key")
     entry_data = {
         CONF_TOKEN_VERSION: 1,
@@ -241,8 +244,14 @@ async def test_action_nonce_view_issues_nonce(monkeypatch: pytest.MonkeyPatch, n
         del args, kwargs
         return False
 
-    monkeypatch.setattr("custom_components.easy_control.api.async_get_token_use_count", _fake_use_count)
-    monkeypatch.setattr("custom_components.easy_control.api.async_is_token_revoked", _fake_is_revoked)
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _fake_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
 
     response = await GuestAccessActionNonceView().get(request)
     body = _json_body(response)
@@ -253,7 +262,10 @@ async def test_action_nonce_view_issues_nonce(monkeypatch: pytest.MonkeyPatch, n
 
 
 @pytest.mark.asyncio
-async def test_action_view_requires_proof_when_enabled(monkeypatch: pytest.MonkeyPatch, now_ts: int) -> None:
+async def test_action_view_requires_proof_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
     domain_data = _build_domain_data(require_action_proof=True)
     token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
     token, _payload = token_manager.create_guest_token(
@@ -280,8 +292,14 @@ async def test_action_view_requires_proof_when_enabled(monkeypatch: pytest.Monke
         del args, kwargs
         return False
 
-    monkeypatch.setattr("custom_components.easy_control.api.async_get_token_use_count", _fake_use_count)
-    monkeypatch.setattr("custom_components.easy_control.api.async_is_token_revoked", _fake_is_revoked)
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _fake_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
 
     response = await GuestAccessActionView().post(request)
     body = _json_body(response)

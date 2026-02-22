@@ -30,10 +30,15 @@ def test_invalid_scope_mapping_rejected() -> None:
 
 def test_proof_failure_response_maps_explicit_error_codes() -> None:
     view = _FakeView()
+    cases = [
+        (ActionProofMissingError("missing"), "action_proof_required"),
+        (ActionProofReplayError("replay"), "action_proof_replay"),
+        (ActionProofNonceExpiredError("expired"), "action_nonce_expired"),
+        (ActionProofClockSkewError("skew"), "action_proof_clock_skew"),
+        (TokenRevokedError("revoked"), "token_revoked"),
+        (ActionProofInvalidError("invalid"), "action_proof_invalid"),
+    ]
 
-    assert _proof_failure_response(view, ActionProofMissingError("missing"))["payload"]["error"] == "action_proof_required"
-    assert _proof_failure_response(view, ActionProofReplayError("replay"))["payload"]["error"] == "action_proof_replay"
-    assert _proof_failure_response(view, ActionProofNonceExpiredError("expired"))["payload"]["error"] == "action_nonce_expired"
-    assert _proof_failure_response(view, ActionProofClockSkewError("skew"))["payload"]["error"] == "action_proof_clock_skew"
-    assert _proof_failure_response(view, TokenRevokedError("revoked"))["payload"]["error"] == "token_revoked"
-    assert _proof_failure_response(view, ActionProofInvalidError("invalid"))["payload"]["error"] == "action_proof_invalid"
+    for err, expected_error in cases:
+        response = _proof_failure_response(view, err)
+        assert response["payload"]["error"] == expected_error

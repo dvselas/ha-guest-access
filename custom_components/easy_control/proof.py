@@ -176,7 +176,12 @@ def verify_ed25519_signature(public_key_raw: bytes, message: bytes, signature: b
         raise ActionProofInvalidError("Action proof signature is invalid") from err
 
 
-def validate_proof_clock(proof: ActionProof, *, max_skew_seconds: int, now_timestamp: int | None = None) -> None:
+def validate_proof_clock(
+    proof: ActionProof,
+    *,
+    max_skew_seconds: int,
+    now_timestamp: int | None = None,
+) -> None:
     """Validate proof timestamp is within allowed skew."""
     now = int(time.time()) if now_timestamp is None else now_timestamp
     max_skew_seconds = max(int(max_skew_seconds), 0)
@@ -197,4 +202,3 @@ def parse_cnf_jkt(payload_dict: dict[str, Any]) -> str | None:
     if not isinstance(jkt, str) or not jkt:
         raise InvalidTokenError("cnf.jkt must be a non-empty string")
     return jkt
-

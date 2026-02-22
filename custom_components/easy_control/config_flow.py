@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import voluptuous as vol
-
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
-    CONF_ALLOWED_CIDRS,
     CONF_ACTION_PROOF_CLOCK_SKEW_SECONDS,
     CONF_ACTION_RATE_LIMIT_PER_MIN,
+    CONF_ALLOWED_CIDRS,
     CONF_DEFAULT_REQUIRE_ADMIN_APPROVAL,
     CONF_LOCAL_ONLY,
     CONF_NONCE_TTL_SECONDS,
@@ -18,17 +17,17 @@ from .const import (
     CONF_QR_RATE_LIMIT_PER_MIN,
     CONF_REQUIRE_ACTION_PROOF,
     CONF_REQUIRE_DEVICE_BINDING,
-    DEFAULT_ALLOWED_CIDRS,
     DEFAULT_ACTION_PROOF_CLOCK_SKEW_SECONDS,
     DEFAULT_ACTION_RATE_LIMIT_PER_MIN,
+    DEFAULT_ALLOWED_CIDRS,
+    DEFAULT_ENTRY_TITLE,
+    DEFAULT_LOCAL_ONLY,
     DEFAULT_NONCE_TTL_SECONDS,
     DEFAULT_PAIR_RATE_LIMIT_PER_MIN,
     DEFAULT_QR_RATE_LIMIT_PER_MIN,
     DEFAULT_REQUIRE_ACTION_PROOF,
     DEFAULT_REQUIRE_ADMIN_APPROVAL,
     DEFAULT_REQUIRE_DEVICE_BINDING,
-    DEFAULT_ENTRY_TITLE,
-    DEFAULT_LOCAL_ONLY,
     DOMAIN,
 )
 from .network import normalize_allowed_cidrs, parse_allowed_cidrs_text

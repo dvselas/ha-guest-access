@@ -114,10 +114,7 @@ class FixedWindowRateLimiter:
         composite_key = f"{bucket}:{key}"
         window_start = (now // window_seconds) * window_seconds
         current = self._windows.get(composite_key)
-        if current is None or current[0] != window_start:
-            count = 0
-        else:
-            count = current[1]
+        count = 0 if current is None or current[0] != window_start else current[1]
 
         if count >= limit:
             retry_after = (window_start + window_seconds) - now
@@ -138,4 +135,3 @@ class FixedWindowRateLimiter:
             limit=limit,
             window_seconds=window_seconds,
         )
-

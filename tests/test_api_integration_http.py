@@ -12,8 +12,8 @@ from typing import Any
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from pytest_homeassistant_custom_component.common import async_mock_service
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant_custom_component.common import async_mock_service
 
 from custom_components.easy_control.api import async_register_api
 from custom_components.easy_control.const import (
@@ -34,7 +34,11 @@ from custom_components.easy_control.const import (
     DOMAIN,
 )
 from custom_components.easy_control.pairing import PairingStore
-from custom_components.easy_control.proof import ActionProof, build_proof_signing_input, hash_request_body
+from custom_components.easy_control.proof import (
+    ActionProof,
+    build_proof_signing_input,
+    hash_request_body,
+)
 from custom_components.easy_control.runtime_security import ActionNonceStore, FixedWindowRateLimiter
 from custom_components.easy_control.token import GuestTokenManager
 
@@ -82,7 +86,12 @@ def _build_domain_data(
     }
 
 
-async def _setup_api(hass, *, require_action_proof: bool = False, require_device_binding: bool = False):
+async def _setup_api(
+    hass,
+    *,
+    require_action_proof: bool = False,
+    require_device_binding: bool = False,
+):
     assert await async_setup_component(hass, "http", {})
     domain_data = _build_domain_data(
         require_action_proof=require_action_proof,
@@ -211,7 +220,11 @@ async def test_pair_nonce_action_flow_with_pop_proof_executes_service(
 
 
 @pytest.mark.asyncio
-async def test_action_endpoint_rejects_missing_proof_when_required(hass, hass_client_no_auth, now_ts: int):
+async def test_action_endpoint_rejects_missing_proof_when_required(
+    hass,
+    hass_client_no_auth,
+    now_ts: int,
+):
     domain_data = await _setup_api(hass, require_action_proof=True)
     token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
     guest_token, _ = token_manager.create_guest_token(
@@ -240,7 +253,11 @@ async def test_action_endpoint_rejects_missing_proof_when_required(hass, hass_cl
 
 
 @pytest.mark.asyncio
-async def test_qr_endpoint_returns_svg_once_then_410(hass, hass_client_no_auth, monkeypatch: pytest.MonkeyPatch):
+async def test_qr_endpoint_returns_svg_once_then_410(
+    hass,
+    hass_client_no_auth,
+    monkeypatch: pytest.MonkeyPatch,
+):
     domain_data = await _setup_api(hass)
     pairing_store: PairingStore = domain_data[DATA_PAIRING_STORE]
     pairing = pairing_store.create_pairing(

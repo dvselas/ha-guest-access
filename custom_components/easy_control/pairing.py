@@ -5,8 +5,8 @@ from __future__ import annotations
 import secrets
 import string
 import time
-from hmac import compare_digest
 from dataclasses import dataclass, replace
+from hmac import compare_digest
 from typing import Any
 
 from .const import PAIRING_CODE_TTL_SECONDS

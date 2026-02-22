@@ -171,8 +171,10 @@ def test_token_manager_verifies_old_tokens_after_key_rotation(now_ts: int) -> No
         now_timestamp=now_ts,
     )
 
-    assert rotating_manager.verify_token(old_token, now_timestamp=now_ts + 1).guest_id == "guest-old"
-    assert rotating_manager.verify_token(new_token, now_timestamp=now_ts + 1).guest_id == "guest-new"
+    old_payload = rotating_manager.verify_token(old_token, now_timestamp=now_ts + 1)
+    new_payload = rotating_manager.verify_token(new_token, now_timestamp=now_ts + 1)
+    assert old_payload.guest_id == "guest-old"
+    assert new_payload.guest_id == "guest-new"
 
 
 def test_unknown_kid_is_rejected(now_ts: int) -> None:

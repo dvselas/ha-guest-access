@@ -11,10 +11,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .const import (
-    CONF_SECRET_KEY,
     CONF_ACTIVE_KID,
     CONF_ISSUED_TOKENS,
     CONF_REVOKED_TOKEN_JTIS,
+    CONF_SECRET_KEY,
     CONF_SIGNING_KEY,
     CONF_SIGNING_KEYS,
     CONF_TOKEN_USES,

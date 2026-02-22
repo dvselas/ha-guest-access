@@ -12,7 +12,6 @@ from typing import Any
 from urllib.parse import urlencode
 
 from aiohttp import web
-
 from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -21,9 +20,9 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     ALLOWED_ACTIONS,
-    CONF_ALLOWED_CIDRS,
     CONF_ACTION_PROOF_CLOCK_SKEW_SECONDS,
     CONF_ACTION_RATE_LIMIT_PER_MIN,
+    CONF_ALLOWED_CIDRS,
     CONF_LOCAL_ONLY,
     CONF_NONCE_TTL_SECONDS,
     CONF_PAIR_RATE_LIMIT_PER_MIN,
@@ -31,21 +30,21 @@ from .const import (
     CONF_REQUIRE_ACTION_PROOF,
     CONF_REQUIRE_DEVICE_BINDING,
     CONF_TOKEN_VERSION,
-    DEFAULT_ALLOWED_CIDRS,
-    DEFAULT_ACTION_PROOF_CLOCK_SKEW_SECONDS,
-    DEFAULT_ACTION_RATE_LIMIT_PER_MIN,
-    DEFAULT_LOCAL_ONLY,
-    DEFAULT_NONCE_TTL_SECONDS,
-    DEFAULT_PAIR_RATE_LIMIT_PER_MIN,
-    DEFAULT_QR_RATE_LIMIT_PER_MIN,
-    DEFAULT_REQUIRE_ACTION_PROOF,
-    DEFAULT_TOKEN_MAX_USES,
     DATA_API_REGISTERED,
     DATA_CONFIG_ENTRIES,
     DATA_NONCE_STORE,
     DATA_PAIRING_STORE,
     DATA_RATE_LIMITER,
     DATA_TOKEN_MANAGER,
+    DEFAULT_ACTION_PROOF_CLOCK_SKEW_SECONDS,
+    DEFAULT_ACTION_RATE_LIMIT_PER_MIN,
+    DEFAULT_ALLOWED_CIDRS,
+    DEFAULT_LOCAL_ONLY,
+    DEFAULT_NONCE_TTL_SECONDS,
+    DEFAULT_PAIR_RATE_LIMIT_PER_MIN,
+    DEFAULT_QR_RATE_LIMIT_PER_MIN,
+    DEFAULT_REQUIRE_ACTION_PROOF,
+    DEFAULT_TOKEN_MAX_USES,
     DOMAIN,
     EVENT_GUEST_ACCESS_USED,
     EVENT_RATE_LIMITED,
@@ -56,8 +55,8 @@ from .proof import (
     ActionProofClockSkewError,
     ActionProofInvalidError,
     ActionProofMissingError,
-    ActionProofReplayError,
     ActionProofNonceExpiredError,
+    ActionProofReplayError,
     build_proof_signing_input,
     canonicalize_public_key,
     decode_action_proof_headers,
@@ -1051,10 +1050,7 @@ def _unauthorized_token_response(
     elif isinstance(err, TokenNotYetValidError):
         error = "token_not_yet_valid"
         message = "Token is not valid yet"
-    elif isinstance(err, TokenVersionMismatchError):
-        error = "token_revoked"
-        message = "Token has been revoked"
-    elif isinstance(err, TokenRevokedError):
+    elif isinstance(err, (TokenVersionMismatchError, TokenRevokedError)):
         error = "token_revoked"
         message = "Token has been revoked"
     elif isinstance(err, TokenAudienceMismatchError):
