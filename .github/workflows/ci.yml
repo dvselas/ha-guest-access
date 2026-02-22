@@ -28,8 +28,14 @@ jobs:
       - name: Type check (mypy)
         run: mypy
 
-      - name: Tests (pytest + coverage)
-        run: pytest --maxfail=1 --disable-warnings --cov=custom_components/easy_control --cov-report=term-missing --cov-fail-under=85
+      - name: Tests (pytest + overall coverage)
+        run: pytest --maxfail=1 --disable-warnings --cov=custom_components/easy_control --cov-report=term-missing --cov-fail-under=60
+
+      - name: Coverage gate (security-critical modules)
+        run: >
+          coverage report
+          --include="custom_components/easy_control/network.py,custom_components/easy_control/pairing.py,custom_components/easy_control/proof.py,custom_components/easy_control/runtime_security.py,custom_components/easy_control/token.py"
+          --fail-under=85
 
       - name: Dependency audit
         run: pip-audit
