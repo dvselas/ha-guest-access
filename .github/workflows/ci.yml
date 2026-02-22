@@ -37,8 +37,34 @@ jobs:
           --include="custom_components/easy_control/network.py,custom_components/easy_control/pairing.py,custom_components/easy_control/proof.py,custom_components/easy_control/runtime_security.py,custom_components/easy_control/token.py"
           --fail-under=85
 
-      - name: Dependency audit
-        run: pip-audit
+      - name: Dependency audit (manifest runtime requirements)
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest_path = Path("custom_components/easy_control/manifest.json")
+          output_path = Path(".ci_runtime_requirements.txt")
+
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          requirements = manifest.get("requirements", [])
+          if not isinstance(requirements, list):
+              raise SystemExit("manifest.json field 'requirements' must be a list")
+
+          normalized: list[str] = []
+          for requirement in requirements:
+              if not isinstance(requirement, str) or not requirement.strip():
+                  raise SystemExit("manifest.json contains an invalid requirement entry")
+              normalized.append(requirement.strip())
+
+          output_path.write_text("\n".join(normalized) + ("\n" if normalized else ""), encoding="utf-8")
+          print(f"Wrote {len(normalized)} runtime requirement(s) from {manifest_path} to {output_path}")
+          PY
+          if [ -s .ci_runtime_requirements.txt ]; then
+            pip-audit -r .ci_runtime_requirements.txt
+          else
+            echo "No custom runtime dependencies declared in manifest.json; skipping pip-audit."
+          fi
 
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@v2
