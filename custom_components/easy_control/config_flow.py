@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from typing import Any
+
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.config_entries import ConfigFlowResult
 
 from .const import (
     CONF_ACTION_PROOF_CLOCK_SKEW_SECONDS,
@@ -39,7 +42,9 @@ class GuestAccessConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    async def async_step_user(self, user_input: dict | None = None) -> FlowResult:
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Handle the initial step."""
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
@@ -77,7 +82,9 @@ class GuestAccessOptionsFlow(config_entries.OptionsFlow):
         """Store config entry for options updates."""
         self._config_entry = config_entry
 
-    async def async_step_init(self, user_input: dict | None = None) -> FlowResult:
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Handle options form."""
         errors: dict[str, str] = {}
 
@@ -155,10 +162,7 @@ class GuestAccessOptionsFlow(config_entries.OptionsFlow):
             CONF_ACTION_PROOF_CLOCK_SKEW_SECONDS,
             DEFAULT_ACTION_PROOF_CLOCK_SKEW_SECONDS,
         )
-        try:
-            current_allowed_cidrs = normalize_allowed_cidrs(current_allowed_cidrs_raw)
-        except ValueError:
-            current_allowed_cidrs = list(DEFAULT_ALLOWED_CIDRS)
+        current_allowed_cidrs = _normalize_entry_cidrs(current_allowed_cidrs_raw)
 
         return self.async_show_form(
             step_id="init",
@@ -211,3 +215,23 @@ class GuestAccessOptionsFlow(config_entries.OptionsFlow):
         if key in self._config_entry.options:
             return self._config_entry.options[key]
         return self._config_entry.data.get(key, default)
+
+
+def _normalize_entry_cidrs(value: object) -> list[str]:
+    """Normalize CIDR option value from config entry/options storage."""
+    if isinstance(value, str):
+        try:
+            return parse_allowed_cidrs_text(value)
+        except ValueError:
+            return list(DEFAULT_ALLOWED_CIDRS)
+
+    if isinstance(value, Iterable):
+        raw_list = list(value)
+        cidrs = [item for item in raw_list if isinstance(item, str)]
+        if cidrs and len(cidrs) == len(raw_list):
+            try:
+                return normalize_allowed_cidrs(cidrs)
+            except ValueError:
+                return list(DEFAULT_ALLOWED_CIDRS)
+
+    return list(DEFAULT_ALLOWED_CIDRS)

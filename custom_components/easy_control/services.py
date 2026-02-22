@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlencode
 
 import homeassistant.helpers.config_validation as cv
@@ -275,10 +275,17 @@ async def async_handle_revoke_all(
             blocking=False,
         )
 
-    return {
+    revoked_at = event_data["revoked_at"]
+    return cast(
+        ServiceResponse,
+        {
         "status": "revoked",
-        **event_data,
-    }
+        "revoked_at": str(revoked_at),
+        "updated_entries": updated_entries,
+        "cleared_pairings": cleared_pairings,
+        "token_version": new_token_version,
+    },
+    )
 
 
 async def async_handle_revoke_pass(
@@ -315,10 +322,17 @@ async def async_handle_revoke_pass(
             },
             blocking=False,
         )
-    return {
+    revoked_at = event_data["revoked_at"]
+    target_guest_id = event_data["target_guest_id"]
+    return cast(
+        ServiceResponse,
+        {
         "status": "revoked",
-        **event_data,
-    }
+        "revoked_at": str(revoked_at),
+        "revoked_jtis": [str(revoked_jti) for revoked_jti in revoked_jtis],
+        "target_guest_id": str(target_guest_id) if target_guest_id is not None else None,
+    },
+    )
 
 
 async def async_handle_approve_pairing(
