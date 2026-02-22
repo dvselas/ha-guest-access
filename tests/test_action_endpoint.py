@@ -1,25 +1,39 @@
-"""Integration-test blueprint for /api/easy_control/action."""
+"""Unit tests for action endpoint helper logic."""
 
 from __future__ import annotations
 
-import pytest
-
-
-pytestmark = pytest.mark.skip(
-    reason=(
-        "Blueprint test file: requires Home Assistant test harness "
-        "(hass fixture, hass_client, async_mock_service)."
-    )
+from custom_components.easy_control.api import _proof_failure_response, _resolve_service_target
+from custom_components.easy_control.proof import (
+    ActionProofClockSkewError,
+    ActionProofInvalidError,
+    ActionProofMissingError,
+    ActionProofNonceExpiredError,
+    ActionProofReplayError,
 )
+from custom_components.easy_control.token import TokenRevokedError
 
 
-async def test_valid_unlock_executes_service() -> None:
-    """TODO: use async_mock_service(hass, 'lock', 'unlock') and assert call count."""
+class _FakeView:
+    def json(self, payload, status_code=200):  # type: ignore[no-untyped-def]
+        return {"payload": payload, "status_code": status_code}
 
 
-async def test_wrong_action_rejected_before_service_call() -> None:
-    """TODO: assert 403 and no service invocation."""
+def test_valid_unlock_and_open_cover_service_mapping() -> None:
+    assert _resolve_service_target("door.open", "lock.front_door") == ("lock", "unlock")
+    assert _resolve_service_target("garage.open", "cover.garage") == ("cover", "open_cover")
 
 
-async def test_outside_ip_rejected_with_403() -> None:
-    """TODO: set request.remote to public IP and assert policy rejection."""
+def test_invalid_scope_mapping_rejected() -> None:
+    assert _resolve_service_target("door.open", "cover.garage") is None
+    assert _resolve_service_target("garage.open", "lock.front_door") is None
+
+
+def test_proof_failure_response_maps_explicit_error_codes() -> None:
+    view = _FakeView()
+
+    assert _proof_failure_response(view, ActionProofMissingError("missing"))["payload"]["error"] == "action_proof_required"
+    assert _proof_failure_response(view, ActionProofReplayError("replay"))["payload"]["error"] == "action_proof_replay"
+    assert _proof_failure_response(view, ActionProofNonceExpiredError("expired"))["payload"]["error"] == "action_nonce_expired"
+    assert _proof_failure_response(view, ActionProofClockSkewError("skew"))["payload"]["error"] == "action_proof_clock_skew"
+    assert _proof_failure_response(view, TokenRevokedError("revoked"))["payload"]["error"] == "token_revoked"
+    assert _proof_failure_response(view, ActionProofInvalidError("invalid"))["payload"]["error"] == "action_proof_invalid"

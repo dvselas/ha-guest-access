@@ -51,6 +51,10 @@ class TokenMaxUsesExceededError(GuestTokenError):
     """Raised when token has reached its max_uses replay limit."""
 
 
+class TokenRevokedError(GuestTokenError):
+    """Raised when token jti has been revoked explicitly."""
+
+
 def _b64url_encode(raw: bytes) -> str:
     """Base64 URL-safe encode without trailing padding."""
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
@@ -98,6 +102,7 @@ class GuestTokenPayload:
     max_uses: int
     token_version: int
     device_id: str | None = None
+    cnf_jkt: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert payload to serializable dictionary."""
@@ -116,6 +121,8 @@ class GuestTokenPayload:
         }
         if self.device_id:
             payload["device_id"] = self.device_id
+        if self.cnf_jkt:
+            payload["cnf"] = {"jkt": self.cnf_jkt}
         return payload
 
     @classmethod
@@ -133,6 +140,8 @@ class GuestTokenPayload:
         max_uses = data.get("max_uses")
         token_version = data.get("token_version")
         device_id = data.get("device_id")
+        cnf = data.get("cnf")
+        cnf_jkt: str | None = None
 
         if not isinstance(iss, str) or not iss:
             raise InvalidTokenError("iss must be a non-empty string")
@@ -162,6 +171,12 @@ class GuestTokenPayload:
             raise InvalidTokenError("exp must be greater than nbf")
         if device_id is not None and (not isinstance(device_id, str) or not device_id):
             raise InvalidTokenError("device_id must be a non-empty string when set")
+        if cnf is not None:
+            if not isinstance(cnf, dict):
+                raise InvalidTokenError("cnf must be a JSON object when set")
+            cnf_jkt = cnf.get("jkt")
+            if cnf_jkt is None or not isinstance(cnf_jkt, str) or not cnf_jkt:
+                raise InvalidTokenError("cnf.jkt must be a non-empty string when set")
 
         return cls(
             iss=iss,
@@ -176,26 +191,55 @@ class GuestTokenPayload:
             max_uses=max_uses,
             token_version=token_version,
             device_id=device_id,
+            cnf_jkt=cnf_jkt,
         )
 
 
 class GuestTokenManager:
     """Issue and verify signed guest access tokens."""
 
-    def __init__(self, signing_key: str) -> None:
-        """Create token manager bound to signing key."""
+    def __init__(
+        self,
+        signing_key: str | None = None,
+        *,
+        signing_keys: dict[str, str] | None = None,
+        active_kid: str | None = None,
+    ) -> None:
+        """Create token manager bound to a signing key or key ring."""
+        if signing_keys is not None:
+            normalized_keys = {
+                kid: key
+                for kid, key in signing_keys.items()
+                if isinstance(kid, str)
+                and kid
+                and isinstance(key, str)
+                and key
+            }
+            if not normalized_keys:
+                raise ValueError("signing_keys must contain at least one non-empty key")
+            chosen_kid = active_kid or next(iter(normalized_keys))
+            if chosen_kid not in normalized_keys:
+                raise ValueError("active_kid must exist in signing_keys")
+            self._keys = {kid: value.encode("utf-8") for kid, value in normalized_keys.items()}
+            self._active_kid = chosen_kid
+            return
+
         if not isinstance(signing_key, str) or not signing_key:
             raise ValueError("signing_key must be a non-empty string")
-        self._key = signing_key.encode("utf-8")
+        self._keys = {"v1": signing_key.encode("utf-8")}
+        self._active_kid = "v1"
 
     def create_token(self, payload: GuestTokenPayload, kid: str) -> str:
         """Create signed JWT-like token from payload."""
+        key = self._keys.get(kid)
+        if key is None:
+            raise ValueError(f"Unknown signing kid '{kid}'")
         header_segment = _b64url_encode(
             _json_dump({"alg": "HS256", "typ": "JWT", "kid": kid})
         )
         payload_segment = _b64url_encode(_json_dump(payload.to_dict()))
         signing_input = f"{header_segment}.{payload_segment}".encode("ascii")
-        signature = hmac.new(self._key, signing_input, hashlib.sha256).digest()
+        signature = hmac.new(key, signing_input, hashlib.sha256).digest()
         signature_segment = _b64url_encode(signature)
         return f"{header_segment}.{payload_segment}.{signature_segment}"
 
@@ -209,6 +253,7 @@ class GuestTokenManager:
         token_version: int,
         max_uses: int = DEFAULT_TOKEN_MAX_USES,
         device_id: str | None = None,
+        cnf_jkt: str | None = None,
         now_timestamp: int | None = None,
     ) -> tuple[str, GuestTokenPayload]:
         """Create token with full hardened payload."""
@@ -233,8 +278,9 @@ class GuestTokenManager:
             max_uses=max_uses,
             token_version=token_version,
             device_id=device_id,
+            cnf_jkt=cnf_jkt,
         )
-        token = self.create_token(payload=payload, kid=f"v{token_version}")
+        token = self.create_token(payload=payload, kid=self._active_kid)
         return token, payload
 
     def verify_token(
@@ -255,17 +301,21 @@ class GuestTokenManager:
             raise InvalidTokenError("Token must contain exactly three segments")
 
         header_segment, payload_segment, signature_segment = segments
-        signing_input = f"{header_segment}.{payload_segment}".encode("ascii")
-        expected_signature = hmac.new(self._key, signing_input, hashlib.sha256).digest()
-        actual_signature = _b64url_decode(signature_segment)
-        if not hmac.compare_digest(actual_signature, expected_signature):
-            raise InvalidTokenError("Token signature is invalid")
-
         header = _decode_json_segment(header_segment)
         if header.get("alg") != "HS256" or header.get("typ") != "JWT":
             raise InvalidTokenError("Unsupported token header")
         if "kid" not in header or not isinstance(header["kid"], str) or not header["kid"]:
             raise InvalidTokenError("Token header is missing kid")
+        kid = header["kid"]
+        signing_key = self._keys.get(kid)
+        if signing_key is None:
+            raise InvalidTokenError("Token kid is unknown")
+
+        signing_input = f"{header_segment}.{payload_segment}".encode("ascii")
+        expected_signature = hmac.new(signing_key, signing_input, hashlib.sha256).digest()
+        actual_signature = _b64url_decode(signature_segment)
+        if not hmac.compare_digest(actual_signature, expected_signature):
+            raise InvalidTokenError("Token signature is invalid")
 
         payload = GuestTokenPayload.from_dict(_decode_json_segment(payload_segment))
         current_timestamp = int(time.time()) if now_timestamp is None else now_timestamp

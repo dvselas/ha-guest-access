@@ -1,0 +1,6 @@
+-r requirements_test.txt
+pytest-cov
+ruff
+mypy
+pip-audit
+mutmut

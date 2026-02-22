@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import time
 import uuid
@@ -21,21 +22,56 @@ from homeassistant.util import dt as dt_util
 from .const import (
     ALLOWED_ACTIONS,
     CONF_ALLOWED_CIDRS,
+    CONF_ACTION_PROOF_CLOCK_SKEW_SECONDS,
+    CONF_ACTION_RATE_LIMIT_PER_MIN,
     CONF_LOCAL_ONLY,
+    CONF_NONCE_TTL_SECONDS,
+    CONF_PAIR_RATE_LIMIT_PER_MIN,
+    CONF_QR_RATE_LIMIT_PER_MIN,
+    CONF_REQUIRE_ACTION_PROOF,
+    CONF_REQUIRE_DEVICE_BINDING,
     CONF_TOKEN_VERSION,
     DEFAULT_ALLOWED_CIDRS,
+    DEFAULT_ACTION_PROOF_CLOCK_SKEW_SECONDS,
+    DEFAULT_ACTION_RATE_LIMIT_PER_MIN,
     DEFAULT_LOCAL_ONLY,
+    DEFAULT_NONCE_TTL_SECONDS,
+    DEFAULT_PAIR_RATE_LIMIT_PER_MIN,
+    DEFAULT_QR_RATE_LIMIT_PER_MIN,
     DEFAULT_TOKEN_MAX_USES,
     DATA_API_REGISTERED,
     DATA_CONFIG_ENTRIES,
+    DATA_NONCE_STORE,
     DATA_PAIRING_STORE,
+    DATA_RATE_LIMITER,
     DATA_TOKEN_MANAGER,
     DOMAIN,
     EVENT_GUEST_ACCESS_USED,
+    EVENT_RATE_LIMITED,
 )
 from .network import is_remote_allowed
 from .pairing import PairingStore
-from .storage import async_get_token_use_count, async_record_token_use
+from .proof import (
+    ActionProofClockSkewError,
+    ActionProofInvalidError,
+    ActionProofMissingError,
+    ActionProofReplayError,
+    ActionProofNonceExpiredError,
+    build_proof_signing_input,
+    canonicalize_public_key,
+    decode_action_proof_headers,
+    hash_request_body,
+    validate_proof_clock,
+    verify_ed25519_signature,
+)
+from .runtime_security import ActionNonceStore, FixedWindowRateLimiter
+from .storage import (
+    async_get_issued_token_metadata,
+    async_get_token_use_count,
+    async_is_token_revoked,
+    async_record_token_use,
+    async_register_issued_token,
+)
 from .token import (
     GuestTokenManager,
     GuestTokenPayload,
@@ -45,6 +81,7 @@ from .token import (
     TokenIssuerMismatchError,
     TokenMaxUsesExceededError,
     TokenNotYetValidError,
+    TokenRevokedError,
     TokenVersionMismatchError,
 )
 
@@ -66,9 +103,18 @@ class GuestAccessPairView(HomeAssistantView):
     async def post(self, request: web.Request) -> web.Response:
         """Handle pairing-code exchange for guest app onboarding."""
         hass: HomeAssistant = request.app[KEY_HASS]
-        policy_error = _reject_remote_if_disallowed(request, hass.data.get(DOMAIN, {}))
+        domain_data: dict[str, Any] = hass.data.get(DOMAIN, {})
+        policy_error = _reject_remote_if_disallowed(request, domain_data)
         if policy_error is not None:
             return policy_error
+        rate_limit_error = _rate_limit_request(
+            hass,
+            domain_data,
+            request=request,
+            bucket="pair",
+        )
+        if rate_limit_error is not None:
+            return rate_limit_error
 
         try:
             payload = await request.json()
@@ -96,8 +142,17 @@ class GuestAccessPairView(HomeAssistantView):
                 },
                 status_code=400,
             )
+        rate_limit_error = _rate_limit_request(
+            hass,
+            domain_data,
+            request=request,
+            bucket="pair",
+            extra_keys=[pairing_code],
+            include_ip=False,
+        )
+        if rate_limit_error is not None:
+            return rate_limit_error
 
-        domain_data: dict[str, Any] = hass.data.get(DOMAIN, {})
         pairing_store = domain_data.get(DATA_PAIRING_STORE)
         if not isinstance(pairing_store, PairingStore):
             return self.json(
@@ -138,6 +193,56 @@ class GuestAccessPairView(HomeAssistantView):
                 status_code=503,
             )
 
+        require_device_binding = bool(
+            entry_data.get(CONF_REQUIRE_DEVICE_BINDING, False)
+        )
+        require_action_proof = bool(entry_data.get(CONF_REQUIRE_ACTION_PROOF, False))
+
+        device_id = payload.get("device_id")
+        device_public_key = payload.get("device_public_key")
+        cnf_jkt: str | None = None
+        if (require_device_binding or require_action_proof) and (
+            not isinstance(device_id, str)
+            or not device_id
+            or not isinstance(device_public_key, str)
+            or not device_public_key
+        ):
+            return self.json(
+                {
+                    "error": "device_binding_required",
+                    "message": "device_id and device_public_key are required for pairing",
+                },
+                status_code=400,
+            )
+
+        if device_public_key is not None:
+            if not isinstance(device_public_key, str) or not device_public_key:
+                return self.json(
+                    {
+                        "error": "invalid_device_public_key",
+                        "message": "device_public_key must be a non-empty base64url string",
+                    },
+                    status_code=400,
+                )
+            try:
+                _raw_key, cnf_jkt = canonicalize_public_key(device_public_key)
+            except ActionProofInvalidError as err:
+                return self.json(
+                    {
+                        "error": "invalid_device_public_key",
+                        "message": str(err),
+                    },
+                    status_code=400,
+                )
+        if device_id is not None and (not isinstance(device_id, str) or not device_id):
+            return self.json(
+                {
+                    "error": "invalid_device_id",
+                    "message": "device_id must be a non-empty string",
+                },
+                status_code=400,
+            )
+
         pairing, failure_reason = pairing_store.consume_pairing(pairing_code)
         if pairing is None:
             if failure_reason == "expired":
@@ -149,6 +254,22 @@ class GuestAccessPairView(HomeAssistantView):
                     status_code=410,
                 )
 
+            if failure_reason == "pending_approval":
+                return self.json(
+                    {
+                        "error": "pending_approval",
+                        "message": "Pairing request is awaiting admin approval",
+                    },
+                    status_code=202,
+                )
+            if failure_reason == "rejected":
+                return self.json(
+                    {
+                        "error": "pairing_rejected",
+                        "message": "Pairing request was rejected by an administrator",
+                    },
+                    status_code=403,
+                )
             return self.json(
                 {
                     "error": "pairing_code_invalid",
@@ -174,6 +295,17 @@ class GuestAccessPairView(HomeAssistantView):
             expires_at=pairing.pass_expires_at,
             token_version=token_version,
             max_uses=DEFAULT_TOKEN_MAX_USES,
+            device_id=device_id if isinstance(device_id, str) else None,
+            cnf_jkt=cnf_jkt,
+        )
+        await async_register_issued_token(
+            hass,
+            jti=token_payload.jti,
+            guest_id=token_payload.guest_id,
+            exp=token_payload.exp,
+            device_id=token_payload.device_id,
+            cnf_jkt=token_payload.cnf_jkt,
+            device_public_key=device_public_key if isinstance(device_public_key, str) else None,
         )
 
         return self.json(
@@ -183,6 +315,9 @@ class GuestAccessPairView(HomeAssistantView):
                 "expires_at": token_payload.exp,
                 "guest_id": token_payload.guest_id,
                 "max_uses": token_payload.max_uses,
+                "proof_required": require_action_proof,
+                "device_binding_required": require_device_binding,
+                "nonce_endpoint": "/api/easy_control/action/nonce",
             }
         )
 
@@ -253,6 +388,7 @@ class GuestAccessTokenValidateView(HomeAssistantView):
             TokenAudienceMismatchError,
             TokenIssuerMismatchError,
             TokenMaxUsesExceededError,
+            TokenRevokedError,
         ) as err:
             return _unauthorized_token_response(self, err)
 
@@ -277,7 +413,8 @@ class GuestAccessActionView(HomeAssistantView):
     async def post(self, request: web.Request) -> web.Response:
         """Validate bearer token and execute allowed action."""
         hass: HomeAssistant = request.app[KEY_HASS]
-        policy_error = _reject_remote_if_disallowed(request, hass.data.get(DOMAIN, {}))
+        domain_data: dict[str, Any] = hass.data.get(DOMAIN, {})
+        policy_error = _reject_remote_if_disallowed(request, domain_data)
         if policy_error is not None:
             return policy_error
 
@@ -292,7 +429,7 @@ class GuestAccessActionView(HomeAssistantView):
                 status_code=401,
             )
 
-        token_manager, token_version = _resolve_token_context(hass.data.get(DOMAIN, {}))
+        token_manager, token_version = _resolve_token_context(domain_data)
         if token_manager is None or token_version is None:
             return self.json(
                 {
@@ -318,12 +455,14 @@ class GuestAccessActionView(HomeAssistantView):
             TokenAudienceMismatchError,
             TokenIssuerMismatchError,
             TokenMaxUsesExceededError,
+            TokenRevokedError,
         ) as err:
             return _unauthorized_token_response(self, err, include_success=True)
 
         try:
-            payload = await request.json()
-        except ValueError:
+            raw_body = await request.read()
+            payload = json.loads(raw_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
             return self.json(
                 {
                     "success": False,
@@ -342,6 +481,37 @@ class GuestAccessActionView(HomeAssistantView):
                 },
                 status_code=400,
             )
+
+        rate_limit_error = _rate_limit_request(
+            hass,
+            domain_data,
+            request=request,
+            bucket="action",
+            extra_keys=[token_payload.jti],
+        )
+        if rate_limit_error is not None:
+            return rate_limit_error
+
+        require_action_proof, proof_clock_skew = _get_proof_policy(domain_data)
+        if require_action_proof or token_payload.cnf_jkt:
+            try:
+                await _verify_action_proof_request(
+                    hass=hass,
+                    domain_data=domain_data,
+                    request=request,
+                    token_payload=token_payload,
+                    raw_body=raw_body,
+                    max_clock_skew_seconds=proof_clock_skew,
+                )
+            except (
+                ActionProofMissingError,
+                ActionProofInvalidError,
+                ActionProofReplayError,
+                ActionProofNonceExpiredError,
+                ActionProofClockSkewError,
+                TokenRevokedError,
+            ) as err:
+                return _proof_failure_response(self, err)
 
         action = payload.get("action")
         if not isinstance(action, str) or not action:
@@ -411,6 +581,9 @@ class GuestAccessActionView(HomeAssistantView):
             guest_id=token_payload.guest_id,
             entity_id=entity_id,
             timestamp=timestamp,
+            jti=token_payload.jti,
+            remote=request.remote,
+            result="success",
         )
 
         return self.json(
@@ -420,6 +593,90 @@ class GuestAccessActionView(HomeAssistantView):
                 "entity_id": entity_id,
                 "remaining_uses": max(token_payload.max_uses - new_use_count, 0),
                 "used_count": new_use_count,
+            }
+        )
+
+
+class GuestAccessActionNonceView(HomeAssistantView):
+    """Issue a short-lived nonce for a signed action proof."""
+
+    url = "/api/easy_control/action/nonce"
+    name = "api:easy_control:action_nonce"
+    requires_auth = False
+
+    async def get(self, request: web.Request) -> web.Response:
+        """Return a single-use nonce bound to the bearer token jti."""
+        hass: HomeAssistant = request.app[KEY_HASS]
+        domain_data: dict[str, Any] = hass.data.get(DOMAIN, {})
+        policy_error = _reject_remote_if_disallowed(request, domain_data)
+        if policy_error is not None:
+            return policy_error
+
+        rate_limit_error = _rate_limit_request(
+            hass,
+            domain_data,
+            request=request,
+            bucket="nonce",
+        )
+        if rate_limit_error is not None:
+            return rate_limit_error
+
+        bearer_token = _extract_bearer_token(request)
+        if bearer_token is None:
+            return self.json(
+                {
+                    "error": "missing_bearer_token",
+                    "message": "Authorization header with Bearer token is required",
+                },
+                status_code=401,
+            )
+
+        token_manager, token_version = _resolve_token_context(domain_data)
+        if token_manager is None or token_version is None:
+            return self.json(
+                {
+                    "error": "integration_not_ready",
+                    "message": "HA Easy Control token context is not initialized",
+                },
+                status_code=503,
+            )
+
+        try:
+            token_payload, _ = await _verify_guest_token_for_action(
+                hass=hass,
+                token_manager=token_manager,
+                token=bearer_token,
+                token_version=token_version,
+            )
+        except (
+            InvalidTokenError,
+            TokenExpiredError,
+            TokenNotYetValidError,
+            TokenVersionMismatchError,
+            TokenAudienceMismatchError,
+            TokenIssuerMismatchError,
+            TokenMaxUsesExceededError,
+            TokenRevokedError,
+        ) as err:
+            return _unauthorized_token_response(self, err)
+
+        nonce_store = _get_nonce_store(domain_data)
+        if nonce_store is None:
+            return self.json(
+                {
+                    "error": "integration_not_ready",
+                    "message": "Action nonce store is not initialized",
+                },
+                status_code=503,
+            )
+
+        nonce_ttl_seconds = _get_nonce_ttl(domain_data)
+        nonce = nonce_store.issue(jti=token_payload.jti, ttl_seconds=nonce_ttl_seconds)
+        return self.json(
+            {
+                "nonce": nonce.nonce,
+                "expires_at": nonce.expires_at,
+                "jti": token_payload.jti,
             }
         )
 
@@ -453,6 +710,16 @@ class GuestAccessQrView(HomeAssistantView):
                 headers=NO_STORE_HEADERS,
             )
 
+        rate_limit_error = _rate_limit_request(
+            hass,
+            domain_data,
+            request=request,
+            bucket="qr",
+            extra_keys=[pairing_code],
+        )
+        if rate_limit_error is not None:
+            return rate_limit_error
+
         pairing_store = domain_data.get(DATA_PAIRING_STORE)
         if not isinstance(pairing_store, PairingStore):
             return web.Response(
@@ -462,10 +729,24 @@ class GuestAccessQrView(HomeAssistantView):
                 headers=NO_STORE_HEADERS,
             )
 
-        pairing_record = _resolve_pairing_for_qr(
+        pairing_record, qr_failure_reason = _consume_pairing_for_qr(
             pairing_store, pairing_code, qr_access_token
         )
         if pairing_record is None:
+            if qr_failure_reason == "used":
+                return web.Response(
+                    text="QR code has already been used",
+                    status=410,
+                    content_type="text/plain",
+                    headers=NO_STORE_HEADERS,
+                )
+            if qr_failure_reason == "expired":
+                return web.Response(
+                    text="QR code has expired",
+                    status=410,
+                    content_type="text/plain",
+                    headers=NO_STORE_HEADERS,
+                )
             return web.Response(
                 text="Invalid or expired qr access token",
                 status=401,
@@ -475,12 +756,14 @@ class GuestAccessQrView(HomeAssistantView):
 
         base_url = _resolve_home_assistant_url_from_request(request, hass)
         qr_payload = (
-            "guest-access://pair?"
+            "easy-control://pair?"
             + urlencode(
                 {
                     "pairing_code": pairing_record.pairing_code,
                     "code": pairing_record.pairing_code,
                     "base_url": base_url,
+                    "entity_id": pairing_record.entity_id,
+                    "allowed_action": pairing_record.allowed_action,
                 }
             )
         )
@@ -529,6 +812,7 @@ def async_register_api(hass: HomeAssistant) -> None:
 
     hass.http.register_view(GuestAccessPairView)
     hass.http.register_view(GuestAccessTokenValidateView)
+    hass.http.register_view(GuestAccessActionNonceView)
     hass.http.register_view(GuestAccessActionView)
     hass.http.register_view(GuestAccessQrView)
     domain_data[DATA_API_REGISTERED] = True
@@ -546,6 +830,8 @@ async def _verify_guest_token_for_action(
         token,
         expected_token_version=token_version,
     )
+    if await async_is_token_revoked(hass, token_payload.jti):
+        raise TokenRevokedError("Token jti has been revoked")
     use_count = await async_get_token_use_count(hass, token_payload.jti)
     if use_count >= token_payload.max_uses:
         raise TokenMaxUsesExceededError("Token max_uses has been reached")
@@ -633,6 +919,124 @@ def _get_network_policy(domain_data: dict[str, Any]) -> tuple[bool, list[str]]:
     return local_only, list(DEFAULT_ALLOWED_CIDRS)
 
 
+def _get_rate_limit_config(domain_data: dict[str, Any], bucket: str) -> tuple[int, int]:
+    """Return per-minute rate limit config for a bucket."""
+    entry_data = _get_active_entry_data(domain_data)
+    if not isinstance(entry_data, dict):
+        defaults = {
+            "pair": DEFAULT_PAIR_RATE_LIMIT_PER_MIN,
+            "action": DEFAULT_ACTION_RATE_LIMIT_PER_MIN,
+            "nonce": DEFAULT_ACTION_RATE_LIMIT_PER_MIN,
+            "qr": DEFAULT_QR_RATE_LIMIT_PER_MIN,
+        }
+        return defaults.get(bucket, DEFAULT_ACTION_RATE_LIMIT_PER_MIN), 60
+
+    if bucket == "pair":
+        limit = int(entry_data.get(CONF_PAIR_RATE_LIMIT_PER_MIN, DEFAULT_PAIR_RATE_LIMIT_PER_MIN))
+    elif bucket in {"action", "nonce"}:
+        limit = int(
+            entry_data.get(CONF_ACTION_RATE_LIMIT_PER_MIN, DEFAULT_ACTION_RATE_LIMIT_PER_MIN)
+        )
+    elif bucket == "qr":
+        limit = int(entry_data.get(CONF_QR_RATE_LIMIT_PER_MIN, DEFAULT_QR_RATE_LIMIT_PER_MIN))
+    else:
+        limit = DEFAULT_ACTION_RATE_LIMIT_PER_MIN
+    return max(limit, 1), 60
+
+
+def _get_nonce_store(domain_data: dict[str, Any]) -> ActionNonceStore | None:
+    """Return initialized nonce store."""
+    store = domain_data.get(DATA_NONCE_STORE)
+    return store if isinstance(store, ActionNonceStore) else None
+
+
+def _get_rate_limiter(domain_data: dict[str, Any]) -> FixedWindowRateLimiter | None:
+    """Return initialized rate limiter."""
+    limiter = domain_data.get(DATA_RATE_LIMITER)
+    return limiter if isinstance(limiter, FixedWindowRateLimiter) else None
+
+
+def _get_proof_policy(domain_data: dict[str, Any]) -> tuple[bool, int]:
+    """Return action-proof required flag and max clock skew."""
+    entry_data = _get_active_entry_data(domain_data)
+    if not isinstance(entry_data, dict):
+        return DEFAULT_REQUIRE_ACTION_PROOF, DEFAULT_ACTION_PROOF_CLOCK_SKEW_SECONDS
+    return (
+        bool(entry_data.get(CONF_REQUIRE_ACTION_PROOF, DEFAULT_REQUIRE_ACTION_PROOF)),
+        int(
+            entry_data.get(
+                CONF_ACTION_PROOF_CLOCK_SKEW_SECONDS,
+                DEFAULT_ACTION_PROOF_CLOCK_SKEW_SECONDS,
+            )
+        ),
+    )
+
+
+def _get_nonce_ttl(domain_data: dict[str, Any]) -> int:
+    """Return configured action nonce TTL."""
+    entry_data = _get_active_entry_data(domain_data)
+    if not isinstance(entry_data, dict):
+        return DEFAULT_NONCE_TTL_SECONDS
+    return max(
+        int(entry_data.get(CONF_NONCE_TTL_SECONDS, DEFAULT_NONCE_TTL_SECONDS)),
+        1,
+    )
+
+
+def _rate_limit_request(
+    hass: HomeAssistant,
+    domain_data: dict[str, Any],
+    *,
+    request: web.Request,
+    bucket: str,
+    extra_keys: list[str] | None = None,
+    include_ip: bool = True,
+) -> web.Response | None:
+    """Apply fixed-window rate limiting to the request."""
+    limiter = _get_rate_limiter(domain_data)
+    if limiter is None:
+        return None
+
+    limit, window_seconds = _get_rate_limit_config(domain_data, bucket)
+    keys: list[str] = []
+    if include_ip:
+        keys.append(f"ip:{request.remote or 'unknown'}")
+    for value in extra_keys or []:
+        if isinstance(value, str) and value:
+            keys.append(f"key:{value}")
+
+    for key in keys:
+        decision = limiter.check(
+            bucket=bucket,
+            key=key,
+            limit=limit,
+            window_seconds=window_seconds,
+        )
+        if decision.allowed:
+            continue
+        hass.bus.async_fire(
+            EVENT_RATE_LIMITED,
+            {
+                "bucket": bucket,
+                "key": key,
+                "remote": request.remote,
+                "retry_after": decision.retry_after,
+                "timestamp": dt_util.utcnow().isoformat(),
+            },
+        )
+        response = web.json_response(
+            {
+                "error": "rate_limited",
+                "message": "Request rate limit exceeded",
+                "retry_after": decision.retry_after,
+            },
+            status=429,
+        )
+        response.headers["Retry-After"] = str(decision.retry_after)
+        return response
+    return None
+
+
 def _unauthorized_token_response(
     view: HomeAssistantView, err: Exception, include_success: bool = False
 ) -> web.Response:
@@ -647,6 +1051,9 @@ def _unauthorized_token_response(
         error = "token_not_yet_valid"
         message = "Token is not valid yet"
     elif isinstance(err, TokenVersionMismatchError):
+        error = "token_revoked"
+        message = "Token has been revoked"
+    elif isinstance(err, TokenRevokedError):
         error = "token_revoked"
         message = "Token has been revoked"
     elif isinstance(err, TokenAudienceMismatchError):
@@ -665,38 +1072,110 @@ def _unauthorized_token_response(
     return view.json(payload, status_code=401)
 
 
-def _resolve_pairing_for_qr(
+def _proof_failure_response(view: HomeAssistantView, err: Exception) -> web.Response:
+    """Map proof/nonce failures to explicit auth errors for client handling."""
+    if isinstance(err, ActionProofMissingError):
+        return view.json(
+            {
+                "success": False,
+                "error": "action_proof_required",
+                "message": str(err),
+            },
+            status_code=401,
+        )
+    if isinstance(err, ActionProofReplayError):
+        return view.json(
+            {
+                "success": False,
+                "error": "action_proof_replay",
+                "message": str(err),
+            },
+            status_code=401,
+        )
+    if isinstance(err, ActionProofNonceExpiredError):
+        return view.json(
+            {
+                "success": False,
+                "error": "action_nonce_expired",
+                "message": str(err),
+            },
+            status_code=401,
+        )
+    if isinstance(err, ActionProofClockSkewError):
+        return view.json(
+            {
+                "success": False,
+                "error": "action_proof_clock_skew",
+                "message": str(err),
+            },
+            status_code=401,
+        )
+    if isinstance(err, TokenRevokedError):
+        return view.json(
+            {
+                "success": False,
+                "error": "token_revoked",
+                "message": str(err),
+            },
+            status_code=401,
+        )
+    return view.json(
+        {
+            "success": False,
+            "error": "action_proof_invalid",
+            "message": str(err),
+        },
+        status_code=401,
+    )
+
+
+def _consume_pairing_for_qr(
     pairing_store: PairingStore, pairing_code: str, qr_access_token: str
-) -> Any | None:
-    """Validate QR access against current store, with backward compatibility."""
+) -> tuple[Any | None, str | None]:
+    """Consume QR access against current store, with backward compatibility."""
+    consume_qr_access = getattr(pairing_store, "consume_qr_access", None)
+    if callable(consume_qr_access):
+        try:
+            result = consume_qr_access(pairing_code, qr_access_token)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Failed to validate qr access token")
+            return None, "invalid"
+        if (
+            isinstance(result, tuple)
+            and len(result) == 2
+        ):
+            return result
+        return result, None
+
     validate_qr_access = getattr(pairing_store, "validate_qr_access", None)
     if callable(validate_qr_access):
         try:
-            return validate_qr_access(pairing_code, qr_access_token)
+            pairing_record = validate_qr_access(pairing_code, qr_access_token)
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Failed to validate qr access token")
-            return None
+            return None, "invalid"
+        return pairing_record, None
 
     # Backward compatibility path for older PairingStore objects.
     get_pairing = getattr(pairing_store, "get_pairing", None)
     if not callable(get_pairing):
-        return None
+        return None, "invalid"
 
     try:
         pairing_record = get_pairing(pairing_code)
     except Exception:  # noqa: BLE001
         _LOGGER.exception("Failed to load pairing record for qr endpoint")
-        return None
+        return None, "invalid"
 
     if pairing_record is None:
-        return None
+        return None, None
 
     record_qr_access_token = getattr(pairing_record, "qr_access_token", None)
     if not isinstance(record_qr_access_token, str) or not record_qr_access_token:
-        return None
+        return None, "invalid"
     if not compare_digest(record_qr_access_token, qr_access_token):
-        return None
-    return pairing_record
+        return None, "invalid"
+    return pairing_record, None
 
 
 def _resolve_home_assistant_url_from_request(
@@ -721,13 +1200,23 @@ def _resolve_home_assistant_url_from_request(
 
 
 async def _emit_guest_access_usage_log(
-    hass: HomeAssistant, guest_id: str, entity_id: str, timestamp: str
+    hass: HomeAssistant,
+    guest_id: str,
+    entity_id: str,
+    timestamp: str,
+    *,
+    jti: str | None = None,
+    remote: str | None = None,
+    result: str = "success",
 ) -> None:
     """Write local audit trail for successful guest access usage."""
     event_data = {
         "guest_id": guest_id,
         "entity": entity_id,
         "timestamp": timestamp,
+        "jti": jti,
+        "remote": remote,
+        "result": result,
     }
     hass.bus.async_fire(EVENT_GUEST_ACCESS_USED, event_data)
 
@@ -737,9 +1226,78 @@ async def _emit_guest_access_usage_log(
             "log",
             {
                 "name": "HA Easy Control",
-                "message": f"Guest {guest_id} used access on {entity_id} at {timestamp}",
+                "message": (
+                    f"Guest {guest_id} {result} on {entity_id} at {timestamp}"
+                    + (f" (remote={remote})" if remote else "")
+                ),
                 "domain": DOMAIN,
                 "entity_id": entity_id,
             },
             blocking=False,
         )
+
+
+async def _verify_action_proof_request(
+    *,
+    hass: HomeAssistant,
+    domain_data: dict[str, Any],
+    request: web.Request,
+    token_payload: GuestTokenPayload,
+    raw_body: bytes,
+    max_clock_skew_seconds: int,
+) -> None:
+    """Validate nonce + signed action proof for a device-bound request."""
+    proof, signature = decode_action_proof_headers(
+        request.headers.get("X-Easy-Control-Proof"),
+        request.headers.get("X-Easy-Control-Proof-Signature"),
+    )
+    validate_proof_clock(
+        proof,
+        max_skew_seconds=max_clock_skew_seconds,
+    )
+
+    if proof.method.upper() != request.method.upper():
+        raise ActionProofInvalidError("Action proof method does not match request")
+    if proof.path != request.path:
+        raise ActionProofInvalidError("Action proof path does not match request")
+    if proof.jti != token_payload.jti:
+        raise ActionProofInvalidError("Action proof jti does not match token")
+    if proof.body_sha256 != hash_request_body(raw_body):
+        raise ActionProofInvalidError("Action proof body hash does not match request body")
+    if token_payload.device_id and proof.device_id != token_payload.device_id:
+        raise ActionProofInvalidError("Action proof device_id does not match token")
+    if await async_is_token_revoked(hass, token_payload.jti):
+        raise TokenRevokedError("Token jti has been revoked")
+
+    metadata = await async_get_issued_token_metadata(hass, token_payload.jti)
+    if not isinstance(metadata, dict):
+        raise ActionProofInvalidError("Issued token metadata was not found")
+
+    device_public_key = metadata.get("device_public_key")
+    if not isinstance(device_public_key, str) or not device_public_key:
+        raise ActionProofInvalidError("Device public key is not registered for this token")
+
+    public_key_raw, jkt = canonicalize_public_key(device_public_key)
+    expected_jkt = token_payload.cnf_jkt or metadata.get("cnf_jkt")
+    if isinstance(expected_jkt, str) and expected_jkt and jkt != expected_jkt:
+        raise ActionProofInvalidError("Device key thumbprint does not match token binding")
+
+    nonce_store = _get_nonce_store(domain_data)
+    if nonce_store is None:
+        raise ActionProofInvalidError("Action nonce store is not initialized")
+    _nonce_record, nonce_failure_reason = nonce_store.consume(
+        nonce=proof.nonce,
+        jti=token_payload.jti,
+    )
+    if nonce_failure_reason == "expired":
+        raise ActionProofNonceExpiredError("Action proof nonce has expired")
+    if nonce_failure_reason in {"used", "wrong_jti"}:
+        raise ActionProofReplayError("Action proof nonce has already been used")
+    if _nonce_record is None:
+        raise ActionProofInvalidError("Action proof nonce is invalid")
+
+    verify_ed25519_signature(
+        public_key_raw,
+        build_proof_signing_input(proof),
+        signature,
+    )

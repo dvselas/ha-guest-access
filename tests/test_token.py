@@ -127,3 +127,67 @@ def test_token_version_mismatch_is_rejected(now_ts: int) -> None:
             expected_token_version=2,
             now_timestamp=now_ts + 1,
         )
+
+
+def test_token_can_include_device_binding_claim(now_ts: int) -> None:
+    manager = GuestTokenManager("test-signing-key")
+    token, _ = manager.create_guest_token(
+        guest_id="guest-1",
+        entity_id="lock.front_door",
+        allowed_action="door.open",
+        expires_at=now_ts + 60,
+        token_version=1,
+        device_id="device-123",
+        cnf_jkt="thumbprint-abc",
+        now_timestamp=now_ts,
+    )
+
+    payload = manager.verify_token(token, now_timestamp=now_ts + 1)
+    assert payload.device_id == "device-123"
+    assert payload.cnf_jkt == "thumbprint-abc"
+
+
+def test_token_manager_verifies_old_tokens_after_key_rotation(now_ts: int) -> None:
+    rotating_manager = GuestTokenManager(
+        signing_keys={"v1": "key-one", "v2": "key-two"},
+        active_kid="v2",
+    )
+    old_manager = GuestTokenManager(signing_keys={"v1": "key-one"}, active_kid="v1")
+
+    old_token, _ = old_manager.create_guest_token(
+        guest_id="guest-old",
+        entity_id="cover.garage_main",
+        allowed_action="garage.open",
+        expires_at=now_ts + 120,
+        token_version=1,
+        now_timestamp=now_ts,
+    )
+    new_token, _ = rotating_manager.create_guest_token(
+        guest_id="guest-new",
+        entity_id="cover.garage_main",
+        allowed_action="garage.open",
+        expires_at=now_ts + 120,
+        token_version=2,
+        now_timestamp=now_ts,
+    )
+
+    assert rotating_manager.verify_token(old_token, now_timestamp=now_ts + 1).guest_id == "guest-old"
+    assert rotating_manager.verify_token(new_token, now_timestamp=now_ts + 1).guest_id == "guest-new"
+
+
+def test_unknown_kid_is_rejected(now_ts: int) -> None:
+    manager = GuestTokenManager("test-signing-key")
+    token, _ = manager.create_guest_token(
+        guest_id="guest-1",
+        entity_id="cover.garage_main",
+        allowed_action="garage.open",
+        expires_at=now_ts + 600,
+        token_version=1,
+        now_timestamp=now_ts,
+    )
+    header, payload, sig = token.split(".")
+    mutated_header = "eyJhbGciOiJIUzI1NiIsImtpZCI6InY5OTkiLCJ0eXAiOiJKV1QifQ"
+    tampered = ".".join([mutated_header, payload, sig])
+
+    with pytest.raises(InvalidTokenError):
+        manager.verify_token(tampered, now_timestamp=now_ts + 1)
