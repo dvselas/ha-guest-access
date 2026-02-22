@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from custom_components.guest_access.pairing import PairingRecord, PairingStore
+from custom_components.easy_control.pairing import PairingRecord, PairingStore
 
 
 def test_pairing_valid_once_then_rejected() -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from custom_components.guest_access.network import (
+from custom_components.easy_control.network import (
     is_remote_allowed,
     normalize_allowed_cidrs,
     parse_allowed_cidrs_text,

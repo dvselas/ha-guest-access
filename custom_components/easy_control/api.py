@@ -59,8 +59,8 @@ NO_STORE_HEADERS = {
 class GuestAccessPairView(HomeAssistantView):
     """Exchange pairing code for a signed guest token."""
 
-    url = "/api/guest_access/pair"
-    name = "api:guest_access:pair"
+    url = "/api/easy_control/pair"
+    name = "api:easy_control:pair"
     requires_auth = False
 
     async def post(self, request: web.Request) -> web.Response:
@@ -190,8 +190,8 @@ class GuestAccessPairView(HomeAssistantView):
 class GuestAccessTokenValidateView(HomeAssistantView):
     """Validate an already issued guest token."""
 
-    url = "/api/guest_access/token/validate"
-    name = "api:guest_access:token_validate"
+    url = "/api/easy_control/token/validate"
+    name = "api:easy_control:token_validate"
     requires_auth = False
 
     async def post(self, request: web.Request) -> web.Response:
@@ -270,8 +270,8 @@ class GuestAccessTokenValidateView(HomeAssistantView):
 class GuestAccessActionView(HomeAssistantView):
     """Execute a token-scoped door or garage action."""
 
-    url = "/api/guest_access/action"
-    name = "api:guest_access:action"
+    url = "/api/easy_control/action"
+    name = "api:easy_control:action"
     requires_auth = False
 
     async def post(self, request: web.Request) -> web.Response:
@@ -427,8 +427,8 @@ class GuestAccessActionView(HomeAssistantView):
 class GuestAccessQrView(HomeAssistantView):
     """Render pairing QR code as SVG image for Home Assistant UI."""
 
-    url = "/api/guest_access/qr"
-    name = "api:guest_access:qr"
+    url = "/api/easy_control/qr"
+    name = "api:easy_control:qr"
     requires_auth = False
 
     async def get(self, request: web.Request) -> web.Response:

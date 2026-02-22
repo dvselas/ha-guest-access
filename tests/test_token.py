@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from custom_components.guest_access.token import (
+from custom_components.easy_control.token import (
     GuestTokenManager,
     InvalidTokenError,
     TokenAudienceMismatchError,

@@ -14,7 +14,7 @@ pytestmark = pytest.mark.skip(
 
 
 async def test_revoke_all_invalidates_existing_tokens() -> None:
-    """TODO: create token, call guest_access.revoke_all, expect 401 on action endpoint."""
+    """TODO: create token, call easy_control.revoke_all_guest_pass, expect 401 on action endpoint."""
 
 
 async def test_new_token_after_revoke_all_is_valid() -> None:

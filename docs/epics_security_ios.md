@@ -9,7 +9,7 @@
 
 ### Feature A.2: Revocation and Replay Protection
 - [x] Persist global `token_version` in `.storage`
-- [x] Increment `token_version` on `guest_access.revoke_all`
+- [x] Increment `token_version` on `easy_control.revoke_all_guest_pass`
 - [x] Persist per-`jti` usage counter and enforce `max_uses`
 
 ### Feature A.3: Action Validation Sequence

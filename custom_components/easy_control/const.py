@@ -1,6 +1,6 @@
 """Constants for the HA Easy Control integration."""
 
-DOMAIN = "guest_access"
+DOMAIN = "easy_control"
 
 CONF_SECRET_KEY = "secret_key"
 CONF_SIGNING_KEY = "signing_key"
@@ -20,10 +20,10 @@ DATA_CONFIG_ENTRIES = "config_entries"
 DATA_API_REGISTERED = "api_registered"
 DATA_STORAGE_LOCK = "storage_lock"
 
-SERVICE_CREATE_PASS = "create_pass"
-SERVICE_REVOKE_ALL = "revoke_all"
-EVENT_REVOKE_ALL = f"{DOMAIN}.revoke_all"
-EVENT_GUEST_ACCESS_USED = "guest_access_used"
+SERVICE_CREATE_PASS = "create_guest_pass"
+SERVICE_REVOKE_ALL = "revoke_all_guest_pass"
+EVENT_REVOKE_ALL = f"{DOMAIN}.{SERVICE_REVOKE_ALL}"
+EVENT_GUEST_ACCESS_USED = "easy_control_used"
 PAIRING_CODE_TTL_SECONDS = 5 * 60
 ALLOWED_ENTITY_DOMAINS = ("lock", "cover")
 ALLOWED_ACTIONS = ("door.open", "garage.open")

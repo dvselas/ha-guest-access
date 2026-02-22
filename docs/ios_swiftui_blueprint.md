@@ -25,7 +25,7 @@ Never store access tokens in:
 
 ## API contract
 ### Pair
-`POST /api/guest_access/pair`
+`POST /api/easy_control/pair`
 
 Request:
 ```json
@@ -44,7 +44,7 @@ Response:
 ```
 
 ### Execute action
-`POST /api/guest_access/action`
+`POST /api/easy_control/action`
 
 Headers:
 `Authorization: Bearer <guest_token>`
@@ -100,12 +100,12 @@ final class GuestAccessAPI {
     init(baseURL: URL) { self.baseURL = baseURL }
 
     func pair(pairingCode: String) async throws -> GuestTokenResponse {
-        // POST /api/guest_access/pair
+        // POST /api/easy_control/pair
         fatalError("Implement URLSession request")
     }
 
     func execute(action: String, token: String) async throws -> ActionResponse {
-        // POST /api/guest_access/action with Bearer token
+        // POST /api/easy_control/action with Bearer token
         fatalError("Implement URLSession request")
     }
 }

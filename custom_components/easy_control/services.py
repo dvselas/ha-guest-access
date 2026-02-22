@@ -117,7 +117,7 @@ async def async_handle_create_pass(
         {"code": pairing.pairing_code, "qr_token": pairing.qr_access_token}
     )
     qr_string = f"guest-access://pair?{pair_query}"
-    qr_image_path = f"/api/guest_access/qr?{qr_query}"
+    qr_image_path = f"/api/easy_control/qr?{qr_query}"
     qr_image_url = qr_image_path
 
     if show_qr_notification and hass.services.has_service(
@@ -135,7 +135,7 @@ async def async_handle_create_pass(
                     f"Fallback pairing_code: `{pairing.pairing_code}`\n"
                     f"Pairing expires_at: `{pairing.pairing_expires_at}`"
                 ),
-                "notification_id": f"guest_access_pairing_{pairing.pairing_code.lower()}",
+                "notification_id": f"easy_control_pairing_{pairing.pairing_code.lower()}",
             },
             blocking=False,
         )

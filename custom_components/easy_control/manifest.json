@@ -1,5 +1,5 @@
 {
-  "domain": "guest_access",
+  "domain": "easy_control",
   "name": "HA Easy Control",
   "codeowners": [
     "@sel0001d"
@@ -10,5 +10,5 @@
   "requirements": [
     "segno==1.6.6"
   ],
-  "version": "0.2.8"
+  "version": "0.3.0"
 }

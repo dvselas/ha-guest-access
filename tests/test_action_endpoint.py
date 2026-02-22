@@ -1,4 +1,4 @@
-"""Integration-test blueprint for /api/guest_access/action."""
+"""Integration-test blueprint for /api/easy_control/action."""
 
 from __future__ import annotations
 
