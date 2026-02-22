@@ -1,4 +1,4 @@
-# HA Guest Access
+# HA Easy Control
 
 Home Assistant custom integration for secure, scoped guest access (door/garage).
 

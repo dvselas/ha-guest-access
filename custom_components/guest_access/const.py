@@ -1,4 +1,4 @@
-"""Constants for the Guest Access integration."""
+"""Constants for the HA Easy Control integration."""
 
 DOMAIN = "guest_access"
 
@@ -37,7 +37,7 @@ TOKEN_ISSUER = DOMAIN
 TOKEN_AUDIENCE = "localkey_ios"
 DEFAULT_TOKEN_VERSION = 1
 DEFAULT_TOKEN_MAX_USES = 10
-DEFAULT_ENTRY_TITLE = "Guest Access"
+DEFAULT_ENTRY_TITLE = "HA Easy Control"
 
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.keys"

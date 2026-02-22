@@ -1,4 +1,4 @@
-# Guest Access Test Blueprint
+# HA Easy Control Test Blueprint
 
 ## Goals
 - Verify hardened JWT validation end-to-end.

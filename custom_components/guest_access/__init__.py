@@ -1,4 +1,4 @@
-"""The Guest Access integration."""
+"""The HA Easy Control integration."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: GuestAccessConfigEntry) -> bool:
-    """Set up Guest Access from a config entry."""
+    """Set up HA Easy Control from a config entry."""
     domain_data = hass.data.setdefault(DOMAIN, {})
     domain_data.setdefault(DATA_PAIRING_STORE, PairingStore())
     config_entries: set[str] = domain_data.setdefault(DATA_CONFIG_ENTRIES, set())
@@ -68,7 +68,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: GuestAccessConfigEntry) 
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: GuestAccessConfigEntry) -> bool:
-    """Unload Guest Access config entry."""
+    """Unload HA Easy Control config entry."""
     domain_data = hass.data.get(DOMAIN)
     if not domain_data:
         return True

@@ -1,4 +1,4 @@
-"""HTTP API endpoints for Guest Access."""
+"""HTTP API endpoints for HA Easy Control."""
 
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ class GuestAccessPairView(HomeAssistantView):
             return self.json(
                 {
                     "error": "integration_not_ready",
-                    "message": "Guest Access pairing is not initialized",
+                    "message": "HA Easy Control pairing is not initialized",
                 },
                 status_code=503,
             )
@@ -113,7 +113,7 @@ class GuestAccessPairView(HomeAssistantView):
             return self.json(
                 {
                     "error": "integration_not_ready",
-                    "message": "Guest Access entry data is not initialized",
+                    "message": "HA Easy Control entry data is not initialized",
                 },
                 status_code=503,
             )
@@ -123,7 +123,7 @@ class GuestAccessPairView(HomeAssistantView):
             return self.json(
                 {
                     "error": "integration_not_ready",
-                    "message": "Guest Access token manager is not initialized",
+                    "message": "HA Easy Control token manager is not initialized",
                 },
                 status_code=503,
             )
@@ -133,7 +133,7 @@ class GuestAccessPairView(HomeAssistantView):
             return self.json(
                 {
                     "error": "integration_not_ready",
-                    "message": "Guest Access token version is not initialized",
+                    "message": "HA Easy Control token version is not initialized",
                 },
                 status_code=503,
             )
@@ -233,7 +233,7 @@ class GuestAccessTokenValidateView(HomeAssistantView):
             return self.json(
                 {
                     "error": "integration_not_ready",
-                    "message": "Guest Access token context is not initialized",
+                    "message": "HA Easy Control token context is not initialized",
                 },
                 status_code=503,
             )
@@ -298,7 +298,7 @@ class GuestAccessActionView(HomeAssistantView):
                 {
                     "success": False,
                     "error": "integration_not_ready",
-                    "message": "Guest Access token context is not initialized",
+                    "message": "HA Easy Control token context is not initialized",
                 },
                 status_code=503,
             )
@@ -456,7 +456,7 @@ class GuestAccessQrView(HomeAssistantView):
         pairing_store = domain_data.get(DATA_PAIRING_STORE)
         if not isinstance(pairing_store, PairingStore):
             return web.Response(
-                text="Guest Access pairing store is not initialized",
+                text="HA Easy Control pairing store is not initialized",
                 status=503,
                 content_type="text/plain",
                 headers=NO_STORE_HEADERS,
@@ -514,7 +514,7 @@ class GuestAccessQrView(HomeAssistantView):
 
 
 def async_register_api(hass: HomeAssistant) -> None:
-    """Register Guest Access HTTP API views exactly once."""
+    """Register HA Easy Control HTTP API views exactly once."""
     domain_data = hass.data.setdefault(DOMAIN, {})
     if domain_data.get(DATA_API_REGISTERED):
         return
@@ -728,7 +728,7 @@ async def _emit_guest_access_usage_log(
             "logbook",
             "log",
             {
-                "name": "Guest Access",
+                "name": "HA Easy Control",
                 "message": f"Guest {guest_id} used access on {entity_id} at {timestamp}",
                 "domain": DOMAIN,
                 "entity_id": entity_id,

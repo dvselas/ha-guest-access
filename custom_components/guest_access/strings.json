@@ -5,8 +5,8 @@
     },
     "step": {
       "user": {
-        "title": "Set up Guest Access",
-        "description": "Create the Guest Access integration."
+        "title": "Set up HA Easy Control",
+        "description": "Create the HA Easy Control integration."
       }
     }
   },
@@ -16,7 +16,7 @@
     },
     "step": {
       "init": {
-        "title": "Guest Access network policy",
+        "title": "HA Easy Control network policy",
         "data": {
           "local_only": "Restrict guest API to local network only",
           "allowed_cidrs": "Allowed CIDR ranges (RFC1918 only, comma separated)"

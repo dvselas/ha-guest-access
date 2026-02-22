@@ -1,4 +1,4 @@
-"""Config flow for Guest Access."""
+"""Config flow for HA Easy Control."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from .storage import async_get_or_create_security_state
 
 
 class GuestAccessConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Guest Access."""
+    """Handle a config flow for HA Easy Control."""
 
     VERSION = 1
 
@@ -48,7 +48,7 @@ class GuestAccessConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class GuestAccessOptionsFlow(config_entries.OptionsFlow):
-    """Handle Guest Access options."""
+    """Handle HA Easy Control options."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Store config entry for options updates."""

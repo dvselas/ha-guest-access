@@ -1,4 +1,4 @@
-"""Test fixtures for Guest Access integration."""
+"""Test fixtures for HA Easy Control integration."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Service registration for Guest Access."""
+"""Service registration for HA Easy Control."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ SERVICE_REVOKE_ALL_SCHEMA = vol.Schema({})
 
 
 def async_register_services(hass: HomeAssistant) -> None:
-    """Register Guest Access services once per Home Assistant instance."""
+    """Register HA Easy Control services once per Home Assistant instance."""
     async def _handle_create_pass(call: ServiceCall) -> ServiceResponse:
         return await async_handle_create_pass(hass, call)
 
@@ -75,7 +75,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 
 
 def async_unregister_services(hass: HomeAssistant) -> None:
-    """Remove Guest Access services."""
+    """Remove HA Easy Control services."""
     if hass.services.has_service(DOMAIN, SERVICE_CREATE_PASS):
         hass.services.async_remove(DOMAIN, SERVICE_CREATE_PASS)
     if hass.services.has_service(DOMAIN, SERVICE_REVOKE_ALL):
@@ -127,10 +127,10 @@ async def async_handle_create_pass(
             "persistent_notification",
             "create",
             {
-                "title": "Guest Access Pairing",
+                "title": "HA Easy Control Pairing",
                 "message": (
                     "Scanne den QR-Code mit der Gast-App.\n\n"
-                    f"![Guest Access QR]({qr_image_url})\n\n"
+                    f"![HA Easy Control QR]({qr_image_url})\n\n"
                     f"[QR-Link öffnen]({qr_image_url})\n\n"
                     f"Fallback pairing_code: `{pairing.pairing_code}`\n"
                     f"Pairing expires_at: `{pairing.pairing_expires_at}`"
@@ -157,7 +157,7 @@ async def async_handle_revoke_all(
     domain_data = hass.data.get(DOMAIN, {})
     entry_ids: set[str] = domain_data.get(DATA_CONFIG_ENTRIES, set())
     if not entry_ids:
-        raise HomeAssistantError("Guest Access has no active config entries")
+        raise HomeAssistantError("HA Easy Control has no active config entries")
 
     new_signing_key = await async_rotate_signing_key(hass)
     new_token_version = await async_increment_token_version(hass, clear_uses=True)
@@ -190,7 +190,7 @@ async def async_handle_revoke_all(
             "logbook",
             "log",
             {
-                "name": "Guest Access",
+                "name": "HA Easy Control",
                 "message": "Emergency revoke_all executed",
                 "domain": DOMAIN,
             },

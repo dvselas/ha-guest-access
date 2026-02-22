@@ -1,4 +1,4 @@
-"""Storage helpers for Guest Access."""
+"""Storage helpers for HA Easy Control."""
 
 from __future__ import annotations
 
