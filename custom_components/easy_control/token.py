@@ -161,8 +161,8 @@ class GuestTokenPayload:
             raise InvalidTokenError("nbf must be an integer Unix timestamp")
         if not isinstance(exp, int):
             raise InvalidTokenError("exp must be an integer Unix timestamp")
-        if not isinstance(max_uses, int) or max_uses < 1:
-            raise InvalidTokenError("max_uses must be a positive integer")
+        if not isinstance(max_uses, int) or max_uses < 0:
+            raise InvalidTokenError("max_uses must be a non-negative integer")
         if not isinstance(token_version, int) or token_version < 1:
             raise InvalidTokenError("token_version must be a positive integer")
         if nbf < iat:
@@ -260,8 +260,8 @@ class GuestTokenManager:
         now = int(time.time()) if now_timestamp is None else now_timestamp
         if expires_at <= now:
             raise ValueError("expires_at must be in the future")
-        if max_uses < 1:
-            raise ValueError("max_uses must be greater than 0")
+        if max_uses < 0:
+            raise ValueError("max_uses must be non-negative (0 = unlimited)")
         if token_version < 1:
             raise ValueError("token_version must be greater than 0")
 

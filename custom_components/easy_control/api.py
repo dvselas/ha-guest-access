@@ -318,6 +318,122 @@ class GuestAccessPairView(HomeAssistantView):
                 "proof_required": require_action_proof,
                 "device_binding_required": require_device_binding,
                 "nonce_endpoint": "/api/easy_control/action/nonce",
+                "scan_ack_supported": True,
+            }
+        )
+
+
+class GuestAccessPairScannedView(HomeAssistantView):
+    """Acknowledge that the app has scanned a pairing QR code."""
+
+    url = "/api/easy_control/pair/scanned"
+    name = "api:easy_control:pair_scanned"
+    requires_auth = False
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Mark QR as scanned without consuming the pairing code."""
+        hass: HomeAssistant = request.app[KEY_HASS]
+        domain_data: dict[str, Any] = hass.data.get(DOMAIN, {})
+        policy_error = _reject_remote_if_disallowed(request, domain_data)
+        if policy_error is not None:
+            return policy_error
+
+        try:
+            payload = await request.json()
+        except ValueError:
+            return self.json(
+                {"error": "invalid_json", "message": "Request body must be valid JSON"},
+                status_code=400,
+            )
+
+        if not isinstance(payload, dict):
+            return self.json(
+                {
+                    "error": "invalid_payload",
+                    "message": "Request body must be a JSON object",
+                },
+                status_code=400,
+            )
+
+        pairing_code = payload.get("pairing_code")
+        scan_ack_token = payload.get("scan_ack_token")
+        if not isinstance(pairing_code, str) or not pairing_code:
+            return self.json(
+                {
+                    "error": "invalid_pairing_code",
+                    "message": "pairing_code must be a non-empty string",
+                },
+                status_code=400,
+            )
+        if not isinstance(scan_ack_token, str) or not scan_ack_token:
+            return self.json(
+                {
+                    "error": "invalid_scan_ack_token",
+                    "message": "scan_ack_token must be a non-empty string",
+                },
+                status_code=400,
+            )
+
+        rate_limit_error = _rate_limit_request(
+            hass,
+            domain_data,
+            request=request,
+            bucket="pair",
+            extra_keys=[pairing_code],
+        )
+        if rate_limit_error is not None:
+            return rate_limit_error
+
+        pairing_store = domain_data.get(DATA_PAIRING_STORE)
+        if not isinstance(pairing_store, PairingStore):
+            return self.json(
+                {
+                    "error": "integration_not_ready",
+                    "message": "HA Easy Control pairing is not initialized",
+                },
+                status_code=503,
+            )
+
+        pairing_record, failure_reason = _acknowledge_pairing_qr_scan(
+            pairing_store,
+            pairing_code,
+            scan_ack_token,
+        )
+        if pairing_record is None:
+            if failure_reason == "expired":
+                return self.json(
+                    {
+                        "error": "pairing_code_expired",
+                        "message": "Pairing code has expired",
+                    },
+                    status_code=410,
+                )
+            return self.json(
+                {
+                    "error": "invalid_scan_ack_token",
+                    "message": "Pairing code or scan acknowledgement token is invalid",
+                },
+                status_code=401,
+            )
+
+        status = "already_acknowledged" if failure_reason == "already_scanned" else "acknowledged"
+        if hass.services.has_service("persistent_notification", "dismiss"):
+            await hass.services.async_call(
+                "persistent_notification",
+                "dismiss",
+                {
+                    "notification_id": (
+                        f"easy_control_pairing_{pairing_record.pairing_code.lower()}"
+                    )
+                },
+                blocking=False,
+            )
+        return self.json(
+            {
+                "success": True,
+                "status": status,
+                "pairing_code": pairing_record.pairing_code,
+                "qr_scanned_at": pairing_record.qr_scanned_at,
             }
         )
 
@@ -398,7 +514,10 @@ class GuestAccessTokenValidateView(HomeAssistantView):
                 "allowed_actions": [token_payload.allowed_action],
                 "entity_id": token_payload.entity_id,
                 "expires_at": token_payload.exp,
-                "remaining_uses": max(token_payload.max_uses - use_count, 0),
+                "remaining_uses": (
+                    -1 if token_payload.max_uses == 0
+                    else max(token_payload.max_uses - use_count, 0)
+                ),
             }
         )
 
@@ -591,7 +710,10 @@ class GuestAccessActionView(HomeAssistantView):
                 "success": True,
                 "action": action,
                 "entity_id": entity_id,
-                "remaining_uses": max(token_payload.max_uses - new_use_count, 0),
+                "remaining_uses": (
+                    -1 if token_payload.max_uses == 0
+                    else max(token_payload.max_uses - new_use_count, 0)
+                ),
                 "used_count": new_use_count,
             }
         )
@@ -729,13 +851,13 @@ class GuestAccessQrView(HomeAssistantView):
                 headers=NO_STORE_HEADERS,
             )
 
-        pairing_record, qr_failure_reason = _consume_pairing_for_qr(
+        pairing_record, qr_failure_reason = _validate_pairing_for_qr(
             pairing_store, pairing_code, qr_access_token
         )
         if pairing_record is None:
-            if qr_failure_reason == "used":
+            if qr_failure_reason in {"used", "scanned"}:
                 return web.Response(
-                    text="QR code has already been used",
+                    text="QR code has already been scanned",
                     status=410,
                     content_type="text/plain",
                     headers=NO_STORE_HEADERS,
@@ -758,15 +880,16 @@ class GuestAccessQrView(HomeAssistantView):
         qr_payload = (
             "easy-control://pair?"
             + urlencode(
-                {
-                    "pairing_code": pairing_record.pairing_code,
-                    "code": pairing_record.pairing_code,
-                    "base_url": base_url,
-                    "entity_id": pairing_record.entity_id,
-                    "allowed_action": pairing_record.allowed_action,
-                }
+                    {
+                        "pairing_code": pairing_record.pairing_code,
+                        "code": pairing_record.pairing_code,
+                        "base_url": base_url,
+                        "entity_id": pairing_record.entity_id,
+                        "allowed_action": pairing_record.allowed_action,
+                        "scan_ack_token": pairing_record.scan_ack_token,
+                    }
+                )
             )
-        )
         try:
             import segno  # Local import keeps tests independent of optional QR dependency.
         except ModuleNotFoundError:
@@ -811,6 +934,7 @@ def async_register_api(hass: HomeAssistant) -> None:
         return
 
     hass.http.register_view(GuestAccessPairView)
+    hass.http.register_view(GuestAccessPairScannedView)
     hass.http.register_view(GuestAccessTokenValidateView)
     hass.http.register_view(GuestAccessActionNonceView)
     hass.http.register_view(GuestAccessActionView)
@@ -833,7 +957,8 @@ async def _verify_guest_token_for_action(
     if await async_is_token_revoked(hass, token_payload.jti):
         raise TokenRevokedError("Token jti has been revoked")
     use_count = await async_get_token_use_count(hass, token_payload.jti)
-    if use_count >= token_payload.max_uses:
+    # max_uses=0 means unlimited until expiry/revocation.
+    if token_payload.max_uses > 0 and use_count >= token_payload.max_uses:
         raise TokenMaxUsesExceededError("Token max_uses has been reached")
     return token_payload, use_count
 
@@ -1126,23 +1251,32 @@ def _proof_failure_response(view: HomeAssistantView, err: Exception) -> web.Resp
     )
 
 
-def _consume_pairing_for_qr(
+def _validate_pairing_for_qr(
     pairing_store: PairingStore, pairing_code: str, qr_access_token: str
 ) -> tuple[Any | None, str | None]:
-    """Consume QR access against current store, with backward compatibility."""
-    consume_qr_access = getattr(pairing_store, "consume_qr_access", None)
-    if callable(consume_qr_access):
+    """Validate QR image access without consuming pairing state."""
+    get_pairing = getattr(pairing_store, "get_pairing", None)
+    if callable(get_pairing):
         try:
-            result = consume_qr_access(pairing_code, qr_access_token)
+            pairing_record = get_pairing(pairing_code)
         except Exception:  # noqa: BLE001
-            _LOGGER.exception("Failed to validate qr access token")
+            _LOGGER.exception("Failed to load pairing record for qr endpoint")
             return None, "invalid"
-        if (
-            isinstance(result, tuple)
-            and len(result) == 2
-        ):
-            return result
-        return result, None
+        if pairing_record is None:
+            return None, None
+
+        record_qr_access_token = getattr(pairing_record, "qr_access_token", None)
+        if not isinstance(record_qr_access_token, str) or not record_qr_access_token:
+            return None, "invalid"
+        if not compare_digest(record_qr_access_token, qr_access_token):
+            return None, "invalid"
+
+        if getattr(pairing_record, "qr_scanned_at", None) is not None:
+            return None, "scanned"
+        if getattr(pairing_record, "qr_access_used_at", None) is not None:
+            return None, "used"
+
+        return pairing_record, None
 
     validate_qr_access = getattr(pairing_store, "validate_qr_access", None)
     if callable(validate_qr_access):
@@ -1153,26 +1287,26 @@ def _consume_pairing_for_qr(
             return None, "invalid"
         return pairing_record, None
 
-    # Backward compatibility path for older PairingStore objects.
-    get_pairing = getattr(pairing_store, "get_pairing", None)
-    if not callable(get_pairing):
-        return None, "invalid"
+    return None, "invalid"
 
-    try:
-        pairing_record = get_pairing(pairing_code)
-    except Exception:  # noqa: BLE001
-        _LOGGER.exception("Failed to load pairing record for qr endpoint")
-        return None, "invalid"
 
-    if pairing_record is None:
-        return None, None
+def _acknowledge_pairing_qr_scan(
+    pairing_store: PairingStore, pairing_code: str, scan_ack_token: str
+) -> tuple[Any | None, str | None]:
+    """Acknowledge QR scan with backward-compatible fallbacks."""
+    acknowledge_qr_scan = getattr(pairing_store, "acknowledge_qr_scan", None)
+    if callable(acknowledge_qr_scan):
+        try:
+            result = acknowledge_qr_scan(pairing_code, scan_ack_token)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Failed to acknowledge qr scan")
+            return None, "invalid"
+        if isinstance(result, tuple) and len(result) == 2:
+            return result
+        return result, None
 
-    record_qr_access_token = getattr(pairing_record, "qr_access_token", None)
-    if not isinstance(record_qr_access_token, str) or not record_qr_access_token:
-        return None, "invalid"
-    if not compare_digest(record_qr_access_token, qr_access_token):
-        return None, "invalid"
-    return pairing_record, None
+    # Older stores do not support explicit scan-ack; fail closed.
+    return None, "invalid"
 
 
 def _resolve_home_assistant_url_from_request(

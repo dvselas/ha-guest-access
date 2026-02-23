@@ -40,6 +40,7 @@ def test_expired_pairing_is_rejected() -> None:
     store._records[record.pairing_code] = PairingRecord(  # noqa: SLF001
         pairing_code=record.pairing_code,
         qr_access_token=record.qr_access_token,
+        scan_ack_token=record.scan_ack_token,
         entity_id=record.entity_id,
         allowed_action=record.allowed_action,
         pass_expires_at=record.pass_expires_at,
@@ -87,6 +88,29 @@ def test_qr_access_token_is_single_use() -> None:
     assert first_reason is None
     assert second_record is None
     assert second_reason == "used"
+
+
+def test_scan_acknowledgement_is_idempotent_and_blocks_qr_render() -> None:
+    store = PairingStore()
+    record = store.create_pairing(
+        entity_id="cover.garage_main",
+        allowed_action="garage.open",
+        pass_expires_at=int(time.time()) + 3600,
+    )
+
+    first_record, first_reason = store.acknowledge_qr_scan(
+        record.pairing_code, record.scan_ack_token
+    )
+    second_record, second_reason = store.acknowledge_qr_scan(
+        record.pairing_code, record.scan_ack_token
+    )
+
+    assert first_record is not None
+    assert first_reason is None
+    assert first_record.qr_scanned_at is not None
+    assert second_record is not None
+    assert second_reason == "already_scanned"
+    assert store.validate_qr_access(record.pairing_code, record.qr_access_token) is None
 
 
 def test_pairing_code_still_single_use_after_qr_render() -> None:
@@ -186,3 +210,100 @@ async def test_concurrent_qr_consume_allows_exactly_one_success() -> None:
     used_count = sum(1 for _pairing, reason in results if reason == "used")
     assert success_count == 1
     assert used_count == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_scan_ack_calls_are_safe() -> None:
+    """Parallel acknowledge_qr_scan calls must yield exactly one 'acknowledged'."""
+    store = PairingStore()
+    record = store.create_pairing(
+        entity_id="cover.garage_main",
+        allowed_action="garage.open",
+        pass_expires_at=int(time.time()) + 3600,
+    )
+
+    async def _ack():
+        return store.acknowledge_qr_scan(record.pairing_code, record.scan_ack_token)
+
+    results = await asyncio.gather(_ack(), _ack())
+    first_ack_count = sum(1 for _rec, reason in results if reason is None)
+    already_count = sum(1 for _rec, reason in results if reason == "already_scanned")
+    assert first_ack_count == 1
+    assert already_count == 1
+    # Both should return a record (idempotent)
+    assert all(rec is not None for rec, _reason in results)
+
+
+def test_scan_ack_then_pair_succeeds() -> None:
+    """Acknowledging QR scan does NOT prevent pairing code consumption."""
+    store = PairingStore()
+    record = store.create_pairing(
+        entity_id="lock.front_door",
+        allowed_action="door.open",
+        pass_expires_at=int(time.time()) + 3600,
+    )
+
+    ack_record, ack_reason = store.acknowledge_qr_scan(
+        record.pairing_code, record.scan_ack_token
+    )
+    assert ack_record is not None
+    assert ack_reason is None
+
+    # QR render should be blocked after ack
+    assert store.validate_qr_access(record.pairing_code, record.qr_access_token) is None
+
+    # But pairing consumption should still work
+    pair_record, pair_reason = store.consume_pairing(record.pairing_code)
+    assert pair_record is not None
+    assert pair_reason is None
+
+    # Second pairing is consumed
+    pair2_record, pair2_reason = store.consume_pairing(record.pairing_code)
+    assert pair2_record is None
+    assert pair2_reason is None
+
+
+def test_scan_ack_with_wrong_token_is_rejected() -> None:
+    """Scan acknowledgement with invalid token returns (None, 'invalid')."""
+    store = PairingStore()
+    record = store.create_pairing(
+        entity_id="cover.garage_main",
+        allowed_action="garage.open",
+        pass_expires_at=int(time.time()) + 3600,
+    )
+
+    result, reason = store.acknowledge_qr_scan(record.pairing_code, "wrong-token")
+    assert result is None
+    assert reason == "invalid"
+
+    # Valid ack should still work after failed attempt
+    result2, reason2 = store.acknowledge_qr_scan(record.pairing_code, record.scan_ack_token)
+    assert result2 is not None
+    assert reason2 is None
+
+
+def test_scan_ack_for_expired_pairing_returns_expired() -> None:
+    """Scan acknowledgement on expired pairing returns (None, 'expired')."""
+    store = PairingStore()
+    now_ts = int(time.time())
+    record = store.create_pairing(
+        entity_id="cover.garage_main",
+        allowed_action="garage.open",
+        pass_expires_at=now_ts + 3600,
+    )
+
+    # Force the pairing to be expired
+    store._records[record.pairing_code] = PairingRecord(  # noqa: SLF001
+        pairing_code=record.pairing_code,
+        qr_access_token=record.qr_access_token,
+        scan_ack_token=record.scan_ack_token,
+        entity_id=record.entity_id,
+        allowed_action=record.allowed_action,
+        pass_expires_at=record.pass_expires_at,
+        pairing_expires_at=now_ts - 1,
+        created_at=record.created_at,
+    )
+
+    result, reason = store.acknowledge_qr_scan(record.pairing_code, record.scan_ack_token)
+    assert result is None
+    assert reason == "expired"

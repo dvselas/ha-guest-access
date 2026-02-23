@@ -21,6 +21,7 @@ class PairingRecord:
 
     pairing_code: str
     qr_access_token: str
+    scan_ack_token: str
     entity_id: str
     allowed_action: str
     pass_expires_at: int
@@ -31,6 +32,7 @@ class PairingRecord:
     approved_at: int | None = None
     rejected_at: int | None = None
     qr_access_used_at: int | None = None
+    qr_scanned_at: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to API/service response structure."""
@@ -69,6 +71,7 @@ class PairingStore:
         record = PairingRecord(
             pairing_code=pairing_code,
             qr_access_token=self._generate_qr_access_token(),
+            scan_ack_token=self._generate_scan_ack_token(),
             entity_id=entity_id,
             allowed_action=allowed_action,
             pass_expires_at=pass_expires_at,
@@ -172,6 +175,8 @@ class PairingStore:
             return None
         if not qr_access_token:
             return None
+        if record.qr_scanned_at is not None:
+            return None
         if record.qr_access_used_at is not None:
             return None
         if not compare_digest(record.qr_access_token, qr_access_token):
@@ -210,6 +215,31 @@ class PairingStore:
         self._records[pairing_code] = updated_record
         return updated_record, None
 
+    def acknowledge_qr_scan(
+        self, pairing_code: str, scan_ack_token: str
+    ) -> tuple[PairingRecord | None, str | None]:
+        """Mark a pairing QR as scanned exactly once without consuming pairing."""
+        now_timestamp = int(time.time())
+        record = self._records.get(pairing_code)
+        if record is None:
+            self._purge_expired(now_timestamp)
+            return None, None
+
+        if record.pairing_expires_at <= now_timestamp:
+            self._records.pop(pairing_code, None)
+            self._purge_expired(now_timestamp)
+            return None, "expired"
+
+        if not scan_ack_token or not compare_digest(record.scan_ack_token, scan_ack_token):
+            return None, "invalid"
+
+        if record.qr_scanned_at is not None:
+            return record, "already_scanned"
+
+        updated_record = replace(record, qr_scanned_at=now_timestamp)
+        self._records[pairing_code] = updated_record
+        return updated_record, None
+
     def delete_pairing(self, pairing_code: str) -> bool:
         """Delete a pairing record by code."""
         now_timestamp = int(time.time())
@@ -243,4 +273,8 @@ class PairingStore:
 
     def _generate_qr_access_token(self) -> str:
         """Generate high-entropy token for unauthenticated QR image retrieval."""
+        return secrets.token_urlsafe(32)
+
+    def _generate_scan_ack_token(self) -> str:
+        """Generate high-entropy token for one-time scan acknowledgement."""
         return secrets.token_urlsafe(32)

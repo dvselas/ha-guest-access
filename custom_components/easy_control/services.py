@@ -184,6 +184,7 @@ async def async_handle_create_pass(
             "base_url": base_url,
             "entity_id": pairing.entity_id,
             "allowed_action": pairing.allowed_action,
+            "scan_ack_token": pairing.scan_ack_token,
         }
     )
     qr_query = urlencode(

@@ -253,7 +253,7 @@ async def test_action_endpoint_rejects_missing_proof_when_required(
 
 
 @pytest.mark.asyncio
-async def test_qr_endpoint_returns_svg_once_then_410(
+async def test_qr_endpoint_is_repeatable_until_scan_ack_then_blocks_but_pair_still_works(
     hass,
     hass_client_no_auth,
     monkeypatch: pytest.MonkeyPatch,
@@ -288,12 +288,35 @@ async def test_qr_endpoint_returns_svg_once_then_410(
         second = await client.get(
             f"/api/easy_control/qr?code={pairing.pairing_code}&qr_token={pairing.qr_access_token}"
         )
-        second_text = await second.text()
+        second_body = await second.read()
+        ack = await client.post(
+            "/api/easy_control/pair/scanned",
+            json={
+                "pairing_code": pairing.pairing_code,
+                "scan_ack_token": pairing.scan_ack_token,
+            },
+        )
+        ack_payload = await ack.json()
+        third = await client.get(
+            f"/api/easy_control/qr?code={pairing.pairing_code}&qr_token={pairing.qr_access_token}"
+        )
+        third_text = await third.text()
+        pair = await client.post(
+            "/api/easy_control/pair",
+            json={"pairing_code": pairing.pairing_code},
+        )
+        pair_payload = await pair.json()
 
         assert first.status == 200
         assert first.content_type == "image/svg+xml"
         assert first_body == b"<svg/>"
-        assert second.status == 410
-        assert "already been used" in second_text
+        assert second.status == 200
+        assert second_body == b"<svg/>"
+        assert ack.status == 200
+        assert ack_payload["status"] == "acknowledged"
+        assert third.status == 410
+        assert "already been scanned" in third_text
+        assert pair.status == 200
+        assert "guest_token" in pair_payload
     finally:
         await client.close()

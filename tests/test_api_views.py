@@ -13,8 +13,10 @@ from homeassistant.components.http import KEY_HASS
 from custom_components.easy_control.api import (
     GuestAccessActionNonceView,
     GuestAccessActionView,
+    GuestAccessPairScannedView,
     GuestAccessPairView,
     GuestAccessQrView,
+    GuestAccessTokenValidateView,
 )
 from custom_components.easy_control.const import (
     CONF_ACTION_PROOF_CLOCK_SKEW_SECONDS,
@@ -310,7 +312,49 @@ async def test_action_view_requires_proof_when_enabled(
 
 
 @pytest.mark.asyncio
-async def test_qr_view_is_one_time_even_with_fake_segno(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_pair_scanned_view_acknowledges_and_is_idempotent() -> None:
+    domain_data = _build_domain_data()
+    pairing_store: PairingStore = domain_data[DATA_PAIRING_STORE]
+    pairing = pairing_store.create_pairing(
+        entity_id="cover.garage",
+        allowed_action="garage.open",
+        pass_expires_at=2_000_000_000,
+    )
+    hass = _FakeHass(domain_data)
+
+    request1 = _FakeRequest(
+        hass=hass,
+        json_payload={
+            "pairing_code": pairing.pairing_code,
+            "scan_ack_token": pairing.scan_ack_token,
+        },
+        path="/api/easy_control/pair/scanned",
+    )
+    request2 = _FakeRequest(
+        hass=hass,
+        json_payload={
+            "pairing_code": pairing.pairing_code,
+            "scan_ack_token": pairing.scan_ack_token,
+        },
+        path="/api/easy_control/pair/scanned",
+    )
+
+    response1 = await GuestAccessPairScannedView().post(request1)
+    response2 = await GuestAccessPairScannedView().post(request2)
+    body1 = _json_body(response1)
+    body2 = _json_body(response2)
+
+    assert response1.status == 200
+    assert body1["status"] == "acknowledged"
+    assert body1["qr_scanned_at"] is not None
+    assert response2.status == 200
+    assert body2["status"] == "already_acknowledged"
+
+
+@pytest.mark.asyncio
+async def test_qr_view_allows_repeated_render_until_scan_ack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     domain_data = _build_domain_data()
     pairing_store: PairingStore = domain_data[DATA_PAIRING_STORE]
     pairing = pairing_store.create_pairing(
@@ -351,7 +395,253 @@ async def test_qr_view_is_one_time_even_with_fake_segno(monkeypatch: pytest.Monk
 
     response1 = await GuestAccessQrView().get(request1)
     response2 = await GuestAccessQrView().get(request2)
+    ack_response = await GuestAccessPairScannedView().post(
+        _FakeRequest(
+            hass=hass,
+            json_payload={
+                "pairing_code": pairing.pairing_code,
+                "scan_ack_token": pairing.scan_ack_token,
+            },
+            path="/api/easy_control/pair/scanned",
+        )
+    )
+    response3 = await GuestAccessQrView().get(
+        _FakeRequest(
+            hass=hass,
+            method="GET",
+            path="/api/easy_control/qr",
+            query={"code": pairing.pairing_code, "qr_token": pairing.qr_access_token},
+        )
+    )
 
     assert response1.status == 200
     assert response1.content_type == "image/svg+xml"
-    assert response2.status == 410
+    assert response2.status == 200
+    assert ack_response.status == 200
+    assert response3.status == 410
+
+
+# --- Multi-use (max_uses=0 unlimited) token tests ---
+
+
+@pytest.mark.asyncio
+async def test_unlimited_token_allows_repeated_actions(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
+    """A token with max_uses=0 can execute the same action repeatedly."""
+    domain_data = _build_domain_data()
+    token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
+    token, payload = token_manager.create_guest_token(
+        guest_id="guest-unlimited",
+        entity_id="cover.garage",
+        allowed_action="garage.open",
+        expires_at=now_ts + 3600,
+        token_version=1,
+        max_uses=0,
+        now_timestamp=now_ts,
+    )
+    hass = _FakeHass(domain_data)
+
+    call_count = 0
+
+    async def _incrementing_use_count(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal call_count
+        call_count += 1
+        return call_count
+
+    async def _fake_is_revoked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return False
+
+    async def _fake_record_use(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal call_count
+        return call_count
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _incrementing_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_record_token_use",
+        _fake_record_use,
+    )
+
+    responses = []
+    for _ in range(5):
+        request = _FakeRequest(
+            hass=hass,
+            headers={"Authorization": f"Bearer {token}"},
+            json_payload={"action": "garage.open"},
+            path="/api/easy_control/action",
+        )
+        response = await GuestAccessActionView().post(request)
+        responses.append(response)
+
+    for resp in responses:
+        body = _json_body(resp)
+        assert resp.status == 200
+        assert body["success"] is True
+        assert body["remaining_uses"] == -1
+
+    assert len(hass.services.calls) == 5
+
+
+@pytest.mark.asyncio
+async def test_finite_max_uses_blocks_after_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
+    """A token with max_uses=2 must block on the 3rd action call."""
+    domain_data = _build_domain_data()
+    token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
+    token, _payload = token_manager.create_guest_token(
+        guest_id="guest-finite",
+        entity_id="lock.front_door",
+        allowed_action="door.open",
+        expires_at=now_ts + 3600,
+        token_version=1,
+        max_uses=2,
+        now_timestamp=now_ts,
+    )
+    hass = _FakeHass(domain_data)
+
+    call_count = 0
+
+    async def _incrementing_use_count(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return call_count
+
+    async def _fake_is_revoked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return False
+
+    async def _fake_record_use(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal call_count
+        call_count += 1
+        return call_count
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _incrementing_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_record_token_use",
+        _fake_record_use,
+    )
+
+    # First two actions succeed
+    for i in range(2):
+        request = _FakeRequest(
+            hass=hass,
+            headers={"Authorization": f"Bearer {token}"},
+            json_payload={"action": "door.open"},
+            path="/api/easy_control/action",
+        )
+        response = await GuestAccessActionView().post(request)
+        body = _json_body(response)
+        assert response.status == 200, f"Action {i + 1} should succeed"
+        assert body["success"] is True
+        assert body["remaining_uses"] == max(2 - (i + 1), 0)
+
+    # Third action is blocked
+    request = _FakeRequest(
+        hass=hass,
+        headers={"Authorization": f"Bearer {token}"},
+        json_payload={"action": "door.open"},
+        path="/api/easy_control/action",
+    )
+    response = await GuestAccessActionView().post(request)
+    body = _json_body(response)
+    assert response.status == 401
+    assert body["error"] == "token_max_uses_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_validate_unlimited_token_returns_remaining_uses_minus_one(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
+    """Token validate endpoint returns remaining_uses=-1 for unlimited tokens."""
+    domain_data = _build_domain_data()
+    token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
+    token, _payload = token_manager.create_guest_token(
+        guest_id="guest-unlimited",
+        entity_id="cover.garage",
+        allowed_action="garage.open",
+        expires_at=now_ts + 3600,
+        token_version=1,
+        max_uses=0,
+        now_timestamp=now_ts,
+    )
+    hass = _FakeHass(domain_data)
+
+    async def _fake_use_count(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 42
+
+    async def _fake_is_revoked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return False
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _fake_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
+
+    request = _FakeRequest(
+        hass=hass,
+        json_payload={"guest_token": token},
+        path="/api/easy_control/token/validate",
+    )
+    response = await GuestAccessTokenValidateView().post(request)
+    body = _json_body(response)
+
+    assert response.status == 200
+    assert body["remaining_uses"] == -1
+
+
+@pytest.mark.asyncio
+async def test_pair_response_includes_scan_ack_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pairing response must include scan_ack_supported=True for backward compat."""
+    domain_data = _build_domain_data()
+    pairing_store: PairingStore = domain_data[DATA_PAIRING_STORE]
+    pairing = pairing_store.create_pairing(
+        entity_id="cover.garage",
+        allowed_action="garage.open",
+        pass_expires_at=2_000_000_000,
+    )
+    hass = _FakeHass(domain_data)
+    request = _FakeRequest(
+        hass=hass,
+        json_payload={"pairing_code": pairing.pairing_code},
+        path="/api/easy_control/pair",
+    )
+
+    async def _noop_register_issued_token(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return None
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_register_issued_token",
+        _noop_register_issued_token,
+    )
+
+    response = await GuestAccessPairView().post(request)
+    body = _json_body(response)
+
+    assert response.status == 200
+    assert body["scan_ack_supported"] is True
