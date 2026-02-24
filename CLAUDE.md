@@ -67,15 +67,52 @@ custom_components/easy_control/
 - Persistent state via HA Store (key `easy_control.keys`): signing keyring, active_kid, token_version, use counts, revoked JTIs, issued token metadata
 - Pairing store is **in-memory only** (not persisted); records auto-purge on 5-min expiry
 
+## Action Proof Canonical Format
+
+The Ed25519 proof uses a **newline-delimited** canonical signing input (NOT JSON-signed):
+```
+METHOD\npath\nts\nnonce\njti\ndevice_id\nbody_sha256
+```
+- Source of truth: `proof.py:build_proof_signing_input()`
+- `body_sha256` is **hex-encoded** (not base64url)
+- Headers: `X-Easy-Control-Proof` (base64url JSON), `X-Easy-Control-Proof-Signature` (base64url Ed25519 sig)
+
+## API Response Contracts
+
+**`POST /pair`** (pairing exchange):
+```json
+{"guest_token", "allowed_actions", "expires_at", "guest_id", "max_uses",
+ "proof_required", "device_binding_required", "nonce_endpoint", "scan_ack_supported"}
+```
+
+**`POST /pair/scanned`** (scan acknowledge):
+```json
+{"success": true, "status": "acknowledged"|"already_acknowledged",
+ "pairing_code", "qr_scanned_at"}
+```
+
+**`POST /action`** (action execution):
+```json
+{"success": true, "action", "entity_id", "remaining_uses", "used_count"}
+```
+`remaining_uses=-1` signals unlimited (`max_uses=0`)
+
+**`POST /token/validate`** (token validation):
+```json
+{"guest_id", "allowed_actions", "entity_id", "expires_at", "remaining_uses"}
+```
+
 ## iOS Companion App
 
 - **Repo:** `../ha-easy-control`
+- **Bundle ID:** `de.vselas.HAEasyControl`
 - **Stack:** Swift/SwiftUI, iOS 16+, MVVM, async/await
 - **QR scanning:** `AVCaptureSession` + `AVCaptureMetadataOutput`
 - **Crypto:** Ed25519 via CryptoKit `Curve25519.Signing`, SHA-256 for body hashes
-- **Token storage:** iOS Keychain (`com.guestaccess.ios` service)
+- **Token storage:** iOS Keychain (`de.vselas.HAEasyControl` service), structured JSON with metadata
 - **Auth:** Biometric (Face ID) + passcode via `LocalAuthentication`
-- **TLS pinning:** Custom `URLSessionDelegate` with per-host policies
+- **TLS pinning:** Custom `URLSessionDelegate` with per-host SHA-256 pinning
+- **Logging:** `os.Logger` with 8 structured categories, privacy-aware redaction
 
 ## Development Commands
 
@@ -123,4 +160,6 @@ pytest --cov=custom_components/easy_control --cov-report=term-missing --cov-fail
 - **Error responses:** consistent `{"error": "code", "message": "detail"}` JSON structure
 - **Events:** prefixed `easy_control.` (services) or literal `easy_control_used` (action audit)
 - **Frozen dataclasses:** `PairingRecord`, `GuestTokenPayload`, `ActionProof`, `ActionNonceRecord`
+- **`scan_ack_supported: true`:** always included in pairing response for backward compat signaling
+- **Proof canonical format:** newline-delimited, NOT JSON-signed (see `proof.py`)
 - **Ruff config:** line-length 100, target py312, rules E/F/I/B/UP/SIM

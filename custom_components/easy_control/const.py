@@ -5,6 +5,7 @@ DOMAIN = "easy_control"
 CONF_SECRET_KEY = "secret_key"
 CONF_SIGNING_KEY = "signing_key"
 CONF_ENTITY = "entity"
+CONF_ENTITIES = "entities"
 CONF_ALLOWED_ACTION = "allowed_action"
 CONF_EXPIRATION_TIME = "expiration_time"
 CONF_LOCAL_ONLY = "local_only"
@@ -20,6 +21,7 @@ CONF_REQUIRE_ACTION_PROOF = "require_action_proof"
 CONF_PAIR_RATE_LIMIT_PER_MIN = "pair_rate_limit_per_min"
 CONF_ACTION_RATE_LIMIT_PER_MIN = "action_rate_limit_per_min"
 CONF_QR_RATE_LIMIT_PER_MIN = "qr_rate_limit_per_min"
+CONF_STATES_RATE_LIMIT_PER_MIN = "states_rate_limit_per_min"
 CONF_NONCE_TTL_SECONDS = "nonce_ttl_seconds"
 CONF_ACTION_PROOF_CLOCK_SKEW_SECONDS = "action_proof_clock_skew_seconds"
 CONF_DEVICE_ID = "device_id"
@@ -51,8 +53,33 @@ EVENT_PAIRING_REJECTED = f"{DOMAIN}.{SERVICE_REJECT_PAIRING}"
 EVENT_GUEST_ACCESS_USED = "easy_control_used"
 EVENT_RATE_LIMITED = f"{DOMAIN}.rate_limited"
 PAIRING_CODE_TTL_SECONDS = 5 * 60
-ALLOWED_ENTITY_DOMAINS = ("lock", "cover")
-ALLOWED_ACTIONS = ("door.open", "garage.open")
+ALLOWED_ENTITY_DOMAINS = ("lock", "cover", "switch", "sensor", "climate", "binary_sensor")
+ALLOWED_ACTIONS = (
+    "door.open",
+    "garage.open",
+    "switch.toggle",
+    "climate.read",
+    "sensor.read",
+    "binary_sensor.read",
+)
+READ_ONLY_DOMAINS = frozenset({"sensor", "binary_sensor", "climate"})
+
+# Maps entity domain → default allowed action (auto-inferred, not user-specified).
+DOMAIN_ACTION_MAP: dict[str, str] = {
+    "lock": "door.open",
+    "cover": "garage.open",
+    "switch": "switch.toggle",
+    "climate": "climate.read",
+    "sensor": "sensor.read",
+    "binary_sensor": "binary_sensor.read",
+}
+
+# Maps (action) → (service_domain, service_name) for actionable domains.
+ACTION_SERVICE_MAP: dict[str, tuple[str, str]] = {
+    "door.open": ("lock", "unlock"),
+    "garage.open": ("cover", "open_cover"),
+    "switch.toggle": ("switch", "toggle"),
+}
 DEFAULT_LOCAL_ONLY = False
 DEFAULT_ALLOWED_CIDRS = (
     "10.0.0.0/8",
@@ -71,6 +98,7 @@ DEFAULT_REQUIRE_ACTION_PROOF = False
 DEFAULT_PAIR_RATE_LIMIT_PER_MIN = 10
 DEFAULT_ACTION_RATE_LIMIT_PER_MIN = 30
 DEFAULT_QR_RATE_LIMIT_PER_MIN = 20
+DEFAULT_STATES_RATE_LIMIT_PER_MIN = 30
 DEFAULT_NONCE_TTL_SECONDS = 45
 DEFAULT_ACTION_PROOF_CLOCK_SKEW_SECONDS = 30
 

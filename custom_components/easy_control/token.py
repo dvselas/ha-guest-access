@@ -88,14 +88,18 @@ def _decode_json_segment(segment: str) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class GuestTokenPayload:
-    """Typed payload for guest access tokens."""
+    """Typed payload for guest access tokens.
+
+    ``entities`` is a tuple of dicts, each with ``entity_id`` and
+    ``allowed_action``.  Backward-compat properties ``entity_id`` and
+    ``allowed_action`` return the first entry's values.
+    """
 
     iss: str
     aud: str
     jti: str
     guest_id: str
-    entity_id: str
-    allowed_action: str
+    entities: tuple[dict[str, str], ...]
     iat: int
     nbf: int
     exp: int
@@ -104,6 +108,31 @@ class GuestTokenPayload:
     device_id: str | None = None
     cnf_jkt: str | None = None
 
+    # -- backward-compat properties (first entity) --------------------------
+
+    @property
+    def entity_id(self) -> str:
+        """Return entity_id of the first entity grant."""
+        return self.entities[0]["entity_id"]
+
+    @property
+    def allowed_action(self) -> str:
+        """Return allowed_action of the first entity grant."""
+        return self.entities[0]["allowed_action"]
+
+    # -- helpers -------------------------------------------------------------
+
+    def entity_ids(self) -> list[str]:
+        """Return all entity IDs in this token."""
+        return [e["entity_id"] for e in self.entities]
+
+    def allowed_action_for(self, entity_id: str) -> str | None:
+        """Return the allowed action for *entity_id*, or ``None``."""
+        for grant in self.entities:
+            if grant["entity_id"] == entity_id:
+                return grant["allowed_action"]
+        return None
+
     def to_dict(self) -> dict[str, Any]:
         """Convert payload to serializable dictionary."""
         payload: dict[str, Any] = {
@@ -111,6 +140,8 @@ class GuestTokenPayload:
             "aud": self.aud,
             "jti": self.jti,
             "guest_id": self.guest_id,
+            "entities": list(self.entities),
+            # Backward-compat singular fields (first entity):
             "entity_id": self.entity_id,
             "allowed_action": self.allowed_action,
             "iat": self.iat,
@@ -127,13 +158,15 @@ class GuestTokenPayload:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GuestTokenPayload:
-        """Validate and construct payload from dictionary."""
+        """Validate and construct payload from dictionary.
+
+        Supports both multi-entity (``entities`` array) and legacy
+        single-entity (``entity_id`` + ``allowed_action``) tokens.
+        """
         iss = data.get("iss")
         aud = data.get("aud")
         jti = data.get("jti")
         guest_id = data.get("guest_id")
-        entity_id = data.get("entity_id")
-        allowed_action = data.get("allowed_action")
         iat = data.get("iat")
         nbf = data.get("nbf")
         exp = data.get("exp")
@@ -151,10 +184,38 @@ class GuestTokenPayload:
             raise InvalidTokenError("jti must be a non-empty string")
         if not isinstance(guest_id, str) or not guest_id:
             raise InvalidTokenError("guest_id must be a non-empty string")
-        if not isinstance(entity_id, str) or not entity_id:
-            raise InvalidTokenError("entity_id must be a non-empty string")
-        if not isinstance(allowed_action, str) or not allowed_action:
-            raise InvalidTokenError("allowed_action must be a non-empty string")
+
+        # --- entities: prefer new array, fall back to singular fields -------
+        raw_entities = data.get("entities")
+        if raw_entities is not None:
+            if not isinstance(raw_entities, list) or not raw_entities:
+                raise InvalidTokenError("entities must be a non-empty list")
+            parsed: list[dict[str, str]] = []
+            for idx, entry in enumerate(raw_entities):
+                if not isinstance(entry, dict):
+                    raise InvalidTokenError(f"entities[{idx}] must be a dict")
+                eid = entry.get("entity_id")
+                eact = entry.get("allowed_action")
+                if not isinstance(eid, str) or not eid:
+                    raise InvalidTokenError(
+                        f"entities[{idx}].entity_id must be a non-empty string"
+                    )
+                if not isinstance(eact, str) or not eact:
+                    raise InvalidTokenError(
+                        f"entities[{idx}].allowed_action must be a non-empty string"
+                    )
+                parsed.append({"entity_id": eid, "allowed_action": eact})
+            entities = tuple(parsed)
+        else:
+            # Legacy single-entity token
+            entity_id = data.get("entity_id")
+            allowed_action = data.get("allowed_action")
+            if not isinstance(entity_id, str) or not entity_id:
+                raise InvalidTokenError("entity_id must be a non-empty string")
+            if not isinstance(allowed_action, str) or not allowed_action:
+                raise InvalidTokenError("allowed_action must be a non-empty string")
+            entities = ({"entity_id": entity_id, "allowed_action": allowed_action},)
+
         if not isinstance(iat, int):
             raise InvalidTokenError("iat must be an integer Unix timestamp")
         if not isinstance(nbf, int):
@@ -183,8 +244,7 @@ class GuestTokenPayload:
             aud=aud,
             jti=jti,
             guest_id=guest_id,
-            entity_id=entity_id,
-            allowed_action=allowed_action,
+            entities=entities,
             iat=iat,
             nbf=nbf,
             exp=exp,
@@ -247,16 +307,23 @@ class GuestTokenManager:
         self,
         *,
         guest_id: str,
-        entity_id: str,
-        allowed_action: str,
+        entities: list[dict[str, str]] | None = None,
         expires_at: int,
         token_version: int,
         max_uses: int = DEFAULT_TOKEN_MAX_USES,
         device_id: str | None = None,
         cnf_jkt: str | None = None,
         now_timestamp: int | None = None,
+        # Legacy single-entity convenience (used when entities is empty):
+        entity_id: str | None = None,
+        allowed_action: str | None = None,
     ) -> tuple[str, GuestTokenPayload]:
-        """Create token with full hardened payload."""
+        """Create token with full hardened payload.
+
+        Pass ``entities`` as a list of ``{"entity_id": ..., "allowed_action": ...}``
+        dicts.  For backward compatibility, ``entity_id`` + ``allowed_action`` can
+        be provided instead (converted to a single-item entities list).
+        """
         now = int(time.time()) if now_timestamp is None else now_timestamp
         if expires_at <= now:
             raise ValueError("expires_at must be in the future")
@@ -265,13 +332,21 @@ class GuestTokenManager:
         if token_version < 1:
             raise ValueError("token_version must be greater than 0")
 
+        # Resolve entities from either new or legacy params
+        resolved_entities: list[dict[str, str]] = list(entities) if entities else []
+        if not resolved_entities and entity_id and allowed_action:
+            resolved_entities = [
+                {"entity_id": entity_id, "allowed_action": allowed_action}
+            ]
+        if not resolved_entities:
+            raise ValueError("entities must contain at least one grant")
+
         payload = GuestTokenPayload(
             iss=TOKEN_ISSUER,
             aud=TOKEN_AUDIENCE,
             jti=uuid.uuid4().hex,
             guest_id=guest_id,
-            entity_id=entity_id,
-            allowed_action=allowed_action,
+            entities=tuple(resolved_entities),
             iat=now,
             nbf=now,
             exp=expires_at,

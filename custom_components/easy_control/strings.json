@@ -27,6 +27,7 @@
           "pair_rate_limit_per_min": "Pair endpoint requests per minute",
           "action_rate_limit_per_min": "Action/nonce requests per minute",
           "qr_rate_limit_per_min": "QR image requests per minute",
+          "states_rate_limit_per_min": "Entity states requests per minute",
           "nonce_ttl_seconds": "Action nonce TTL (seconds)",
           "action_proof_clock_skew_seconds": "Allowed action proof clock skew (seconds)"
         }

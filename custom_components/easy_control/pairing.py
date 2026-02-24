@@ -22,8 +22,7 @@ class PairingRecord:
     pairing_code: str
     qr_access_token: str
     scan_ack_token: str
-    entity_id: str
-    allowed_action: str
+    entities: tuple[dict[str, str], ...]
     pass_expires_at: int
     pairing_expires_at: int
     created_at: int
@@ -34,10 +33,24 @@ class PairingRecord:
     qr_access_used_at: int | None = None
     qr_scanned_at: int | None = None
 
+    # -- backward-compat properties (first entity) --------------------------
+
+    @property
+    def entity_id(self) -> str:
+        """Return entity_id of the first entity grant."""
+        return self.entities[0]["entity_id"]
+
+    @property
+    def allowed_action(self) -> str:
+        """Return allowed_action of the first entity grant."""
+        return self.entities[0]["allowed_action"]
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to API/service response structure."""
         return {
             "pairing_code": self.pairing_code,
+            "entities": list(self.entities),
+            # Backward-compat singular fields (first entity):
             "entity_id": self.entity_id,
             "allowed_action": self.allowed_action,
             "pass_expires_at": self.pass_expires_at,
@@ -57,23 +70,34 @@ class PairingStore:
 
     def create_pairing(
         self,
-        entity_id: str,
-        allowed_action: str,
-        pass_expires_at: int,
         *,
+        pass_expires_at: int,
+        entities: list[dict[str, str]] | None = None,
         require_admin_approval: bool = False,
+        # Legacy single-entity convenience:
+        entity_id: str | None = None,
+        allowed_action: str | None = None,
     ) -> PairingRecord:
-        """Create and store a pairing record with a 5-minute pairing window."""
+        """Create and store a pairing record with a 5-minute pairing window.
+
+        Pass *entities* as a list of ``{"entity_id": ..., "allowed_action": ...}``
+        dicts, or use legacy ``entity_id``/``allowed_action`` for a single entity.
+        """
         now_timestamp = int(time.time())
         self._purge_expired(now_timestamp)
+
+        resolved: list[dict[str, str]] = list(entities) if entities else []
+        if not resolved and entity_id and allowed_action:
+            resolved = [{"entity_id": entity_id, "allowed_action": allowed_action}]
+        if not resolved:
+            raise ValueError("entities must contain at least one grant")
 
         pairing_code = self._generate_unique_code()
         record = PairingRecord(
             pairing_code=pairing_code,
             qr_access_token=self._generate_qr_access_token(),
             scan_ack_token=self._generate_scan_ack_token(),
-            entity_id=entity_id,
-            allowed_action=allowed_action,
+            entities=tuple(resolved),
             pass_expires_at=pass_expires_at,
             pairing_expires_at=now_timestamp + PAIRING_CODE_TTL_SECONDS,
             created_at=now_timestamp,

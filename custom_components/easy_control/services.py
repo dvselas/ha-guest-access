@@ -14,12 +14,10 @@ from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    ALLOWED_ACTIONS,
     ALLOWED_ENTITY_DOMAINS,
     CONF_ACTIVE_KID,
-    CONF_ALLOWED_ACTION,
     CONF_DEFAULT_REQUIRE_ADMIN_APPROVAL,
-    CONF_ENTITY,
+    CONF_ENTITIES,
     CONF_EXPIRATION_TIME,
     CONF_REQUIRE_ADMIN_APPROVAL,
     CONF_SHOW_QR_NOTIFICATION,
@@ -29,6 +27,7 @@ from .const import (
     DATA_PAIRING_STORE,
     DATA_TOKEN_MANAGER,
     DOMAIN,
+    DOMAIN_ACTION_MAP,
     EVENT_PAIRING_APPROVED,
     EVENT_PAIRING_REJECTED,
     EVENT_REVOKE_ALL,
@@ -51,8 +50,7 @@ from .token import GuestTokenManager
 
 SERVICE_CREATE_PASS_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_ENTITY): cv.entity_id,
-        vol.Required(CONF_ALLOWED_ACTION): vol.In(ALLOWED_ACTIONS),
+        vol.Required(CONF_ENTITIES): vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Required(CONF_EXPIRATION_TIME): vol.Any(cv.positive_int, cv.datetime),
         vol.Optional(CONF_SHOW_QR_NOTIFICATION, default=True): bool,
         vol.Optional(CONF_REQUIRE_ADMIN_APPROVAL): bool,
@@ -152,8 +150,7 @@ async def async_handle_create_pass(
     if not isinstance(pairing_store, PairingStore):
         raise HomeAssistantError("Pairing store is not initialized")
 
-    entity_id = call.data[CONF_ENTITY]
-    allowed_action = call.data[CONF_ALLOWED_ACTION]
+    entity_ids_raw: list[str] = call.data[CONF_ENTITIES]
     expiration_time = call.data[CONF_EXPIRATION_TIME]
     show_qr_notification = bool(call.data[CONF_SHOW_QR_NOTIFICATION])
     entry_data = _get_active_entry_data(domain_data)
@@ -166,22 +163,24 @@ async def async_handle_create_pass(
         call.data.get(CONF_REQUIRE_ADMIN_APPROVAL, default_require_admin_approval)
     )
 
-    _validate_entity_action_scope(entity_id, allowed_action)
+    entities = _validate_and_resolve_entities(entity_ids_raw)
     pass_expires_at = _resolve_pass_expiration(hass, expiration_time)
 
     pairing = pairing_store.create_pairing(
-        entity_id=entity_id,
-        allowed_action=allowed_action,
+        entities=entities,
         pass_expires_at=pass_expires_at,
         require_admin_approval=require_admin_approval,
     )
 
     base_url = _resolve_home_assistant_url(hass)
+    entity_ids_csv = ",".join(e["entity_id"] for e in entities)
     pair_query = urlencode(
         {
             "pairing_code": pairing.pairing_code,
             "code": pairing.pairing_code,
             "base_url": base_url,
+            "entity_ids": entity_ids_csv,
+            # Backward-compat singular fields (first entity):
             "entity_id": pairing.entity_id,
             "allowed_action": pairing.allowed_action,
             "scan_ack_token": pairing.scan_ack_token,
@@ -350,23 +349,32 @@ async def async_handle_reject_pairing(
     return await _async_handle_pairing_decision(hass, call, approve=False)
 
 
-def _validate_entity_action_scope(entity_id: str, allowed_action: str) -> None:
-    """Limit pass scopes to door and garage control only."""
-    entity_domain = entity_id.split(".", maxsplit=1)[0]
-    if entity_domain not in ALLOWED_ENTITY_DOMAINS:
-        allowed_domains = ", ".join(ALLOWED_ENTITY_DOMAINS)
-        raise HomeAssistantError(
-            f"Unsupported entity domain '{entity_domain}'. Allowed: {allowed_domains}"
-        )
+def _validate_and_resolve_entities(
+    entity_ids: list[str],
+) -> list[dict[str, str]]:
+    """Validate entity domains and auto-resolve allowed actions.
 
-    if entity_domain == "lock" and allowed_action != "door.open":
-        raise HomeAssistantError(
-            "allowed_action must be 'door.open' when entity is a lock.* door"
-        )
-    if entity_domain == "cover" and allowed_action != "garage.open":
-        raise HomeAssistantError(
-            "allowed_action must be 'garage.open' when entity is a cover.* garage"
-        )
+    Returns a list of ``{"entity_id": ..., "allowed_action": ...}`` dicts.
+    """
+    if not entity_ids:
+        raise HomeAssistantError("At least one entity is required")
+
+    entities: list[dict[str, str]] = []
+    for eid in entity_ids:
+        entity_domain = eid.split(".", maxsplit=1)[0]
+        if entity_domain not in ALLOWED_ENTITY_DOMAINS:
+            allowed_domains = ", ".join(ALLOWED_ENTITY_DOMAINS)
+            raise HomeAssistantError(
+                f"Unsupported entity domain '{entity_domain}'. "
+                f"Allowed: {allowed_domains}"
+            )
+        action = DOMAIN_ACTION_MAP.get(entity_domain)
+        if action is None:
+            raise HomeAssistantError(
+                f"No action mapping for domain '{entity_domain}'"
+            )
+        entities.append({"entity_id": eid, "allowed_action": action})
+    return entities
 
 
 def _resolve_pass_expiration(hass: HomeAssistant, expiration_value: Any) -> int:
@@ -450,27 +458,28 @@ async def _async_handle_pairing_decision(
             raise HomeAssistantError("Pairing code has expired")
         raise HomeAssistantError("Pairing code was not found")
 
+    entity_ids = [e["entity_id"] for e in record.entities]
     event_data = {
         "pairing_code": pairing_code,
         "status": status,
         "decision_reason": reason,
+        "entities": list(record.entities),
         "entity_id": record.entity_id,
-        "allowed_action": record.allowed_action,
         "timestamp": dt_util.utcnow().isoformat(),
     }
     hass.bus.async_fire(event_name, event_data)
     if hass.services.has_service("logbook", "log"):
+        entity_summary = ", ".join(entity_ids[:3])
+        if len(entity_ids) > 3:
+            entity_summary += f" (+{len(entity_ids) - 3} more)"
         await hass.services.async_call(
             "logbook",
             "log",
             {
                 "name": "HA Easy Control",
-                "message": (
-                    f"Pairing {pairing_code} {status} "
-                    f"for {record.entity_id} ({record.allowed_action})"
-                ),
+                "message": f"Pairing {pairing_code} {status} for {entity_summary}",
                 "domain": DOMAIN,
-                "entity_id": record.entity_id,
+                "entity_id": entity_ids[0] if entity_ids else "",
             },
             blocking=False,
         )

@@ -19,6 +19,7 @@ from homeassistant.helpers.network import NoURLAvailableError, get_url
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    ACTION_SERVICE_MAP,
     ALLOWED_ACTIONS,
     CONF_ACTION_PROOF_CLOCK_SKEW_SECONDS,
     CONF_ACTION_RATE_LIMIT_PER_MIN,
@@ -29,6 +30,7 @@ from .const import (
     CONF_QR_RATE_LIMIT_PER_MIN,
     CONF_REQUIRE_ACTION_PROOF,
     CONF_REQUIRE_DEVICE_BINDING,
+    CONF_STATES_RATE_LIMIT_PER_MIN,
     CONF_TOKEN_VERSION,
     DATA_API_REGISTERED,
     DATA_CONFIG_ENTRIES,
@@ -44,10 +46,12 @@ from .const import (
     DEFAULT_PAIR_RATE_LIMIT_PER_MIN,
     DEFAULT_QR_RATE_LIMIT_PER_MIN,
     DEFAULT_REQUIRE_ACTION_PROOF,
+    DEFAULT_STATES_RATE_LIMIT_PER_MIN,
     DEFAULT_TOKEN_MAX_USES,
     DOMAIN,
     EVENT_GUEST_ACCESS_USED,
     EVENT_RATE_LIMITED,
+    READ_ONLY_DOMAINS,
 )
 from .network import is_remote_allowed
 from .pairing import PairingStore
@@ -290,8 +294,7 @@ class GuestAccessPairView(HomeAssistantView):
 
         guest_token, token_payload = token_manager.create_guest_token(
             guest_id=f"guest_{uuid.uuid4().hex}",
-            entity_id=pairing.entity_id,
-            allowed_action=pairing.allowed_action,
+            entities=list(pairing.entities),
             expires_at=pairing.pass_expires_at,
             token_version=token_version,
             max_uses=DEFAULT_TOKEN_MAX_USES,
@@ -311,13 +314,18 @@ class GuestAccessPairView(HomeAssistantView):
         return self.json(
             {
                 "guest_token": guest_token,
-                "allowed_actions": [token_payload.allowed_action],
+                "entities": list(token_payload.entities),
+                "allowed_actions": [
+                    e["allowed_action"] for e in token_payload.entities
+                ],
+                "entity_id": token_payload.entity_id,
                 "expires_at": token_payload.exp,
                 "guest_id": token_payload.guest_id,
                 "max_uses": token_payload.max_uses,
                 "proof_required": require_action_proof,
                 "device_binding_required": require_device_binding,
                 "nonce_endpoint": "/api/easy_control/action/nonce",
+                "states_endpoint": "/api/easy_control/states",
                 "scan_ack_supported": True,
             }
         )
@@ -511,7 +519,10 @@ class GuestAccessTokenValidateView(HomeAssistantView):
         return self.json(
             {
                 "guest_id": token_payload.guest_id,
-                "allowed_actions": [token_payload.allowed_action],
+                "entities": list(token_payload.entities),
+                "allowed_actions": [
+                    e["allowed_action"] for e in token_payload.entities
+                ],
                 "entity_id": token_payload.entity_id,
                 "expires_at": token_payload.exp,
                 "remaining_uses": (
@@ -653,17 +664,47 @@ class GuestAccessActionView(HomeAssistantView):
                 status_code=400,
             )
 
-        if action != token_payload.allowed_action:
+        # Resolve entity_id: from request body (multi-entity) or token (legacy)
+        request_entity_id = payload.get("entity_id")
+        if isinstance(request_entity_id, str) and request_entity_id:
+            entity_id = request_entity_id
+        else:
+            # Backward compat: single-entity token, use first entity
+            entity_id = token_payload.entity_id
+
+        # Validate entity_id is in token scope and action matches
+        granted_action = token_payload.allowed_action_for(entity_id)
+        if granted_action is None:
+            return self.json(
+                {
+                    "success": False,
+                    "error": "entity_not_in_scope",
+                    "message": "Entity is not in token scope",
+                },
+                status_code=403,
+            )
+        if action != granted_action:
             return self.json(
                 {
                     "success": False,
                     "error": "action_not_allowed",
-                    "message": "Requested action is not allowed by token scope",
+                    "message": "Requested action is not allowed for this entity",
                 },
                 status_code=403,
             )
 
-        entity_id = token_payload.entity_id
+        # Read-only domains cannot execute actions
+        entity_domain = entity_id.split(".", maxsplit=1)[0]
+        if entity_domain in READ_ONLY_DOMAINS:
+            return self.json(
+                {
+                    "success": False,
+                    "error": "read_only_entity",
+                    "message": f"Entity domain '{entity_domain}' is read-only",
+                },
+                status_code=400,
+            )
+
         service_target = _resolve_service_target(action, entity_id)
         if service_target is None:
             return self.json(
@@ -877,6 +918,9 @@ class GuestAccessQrView(HomeAssistantView):
             )
 
         base_url = _resolve_home_assistant_url_from_request(request, hass)
+        entity_ids_csv = ",".join(
+            e["entity_id"] for e in pairing_record.entities
+        )
         qr_payload = (
             "easy-control://pair?"
             + urlencode(
@@ -884,6 +928,8 @@ class GuestAccessQrView(HomeAssistantView):
                         "pairing_code": pairing_record.pairing_code,
                         "code": pairing_record.pairing_code,
                         "base_url": base_url,
+                        "entity_ids": entity_ids_csv,
+                        # Backward-compat singular fields:
                         "entity_id": pairing_record.entity_id,
                         "allowed_action": pairing_record.allowed_action,
                         "scan_ack_token": pairing_record.scan_ack_token,
@@ -927,6 +973,90 @@ class GuestAccessQrView(HomeAssistantView):
         )
 
 
+class GuestAccessEntityStatesView(HomeAssistantView):
+    """Return live HA entity states for all token-scoped entities."""
+
+    url = "/api/easy_control/states"
+    name = "api:easy_control:states"
+    requires_auth = False
+
+    async def get(self, request: web.Request) -> web.Response:
+        """Return current state for each entity in the guest token scope."""
+        hass: HomeAssistant = request.app[KEY_HASS]
+        domain_data = hass.data.get(DOMAIN, {})
+        policy_error = _reject_remote_if_disallowed(request, domain_data)
+        if policy_error is not None:
+            return policy_error
+
+        rate_limit_error = _rate_limit_request(
+            hass, domain_data, request=request, bucket="states"
+        )
+        if rate_limit_error is not None:
+            return rate_limit_error
+
+        bearer = _extract_bearer_token(request)
+        if not bearer:
+            return self.json(
+                {"error": "missing_token", "message": "Bearer token is required"},
+                status_code=401,
+            )
+
+        token_manager, token_version = _resolve_token_context(domain_data)
+        if token_manager is None or token_version is None:
+            return self.json(
+                {
+                    "error": "integration_not_ready",
+                    "message": "HA Easy Control token context is not initialized",
+                },
+                status_code=503,
+            )
+
+        try:
+            token_payload, _use_count = await _verify_guest_token_for_action(
+                hass=hass,
+                token_manager=token_manager,
+                token=bearer,
+                token_version=token_version,
+            )
+        except (
+            InvalidTokenError,
+            TokenExpiredError,
+            TokenNotYetValidError,
+            TokenVersionMismatchError,
+            TokenAudienceMismatchError,
+            TokenIssuerMismatchError,
+            TokenMaxUsesExceededError,
+            TokenRevokedError,
+        ) as err:
+            return _unauthorized_token_response(self, err)
+
+        entity_states: list[dict[str, Any]] = []
+        for grant in token_payload.entities:
+            eid = grant["entity_id"]
+            state_obj = hass.states.get(eid)
+            domain = eid.split(".", maxsplit=1)[0]
+            entry: dict[str, Any] = {
+                "entity_id": eid,
+                "domain": domain,
+                "state": state_obj.state if state_obj else "unavailable",
+                "friendly_name": (
+                    state_obj.attributes.get("friendly_name", eid)
+                    if state_obj
+                    else eid
+                ),
+            }
+            if state_obj:
+                unit = state_obj.attributes.get("unit_of_measurement")
+                if unit:
+                    entry["unit"] = unit
+                device_class = state_obj.attributes.get("device_class")
+                if device_class:
+                    entry["device_class"] = device_class
+            entity_states.append(entry)
+
+        return self.json({"entities": entity_states})
+
+
 def async_register_api(hass: HomeAssistant) -> None:
     """Register HA Easy Control HTTP API views exactly once."""
     domain_data = hass.data.setdefault(DOMAIN, {})
@@ -939,6 +1069,7 @@ def async_register_api(hass: HomeAssistant) -> None:
     hass.http.register_view(GuestAccessActionNonceView)
     hass.http.register_view(GuestAccessActionView)
     hass.http.register_view(GuestAccessQrView)
+    hass.http.register_view(GuestAccessEntityStatesView)
     domain_data[DATA_API_REGISTERED] = True
 
 
@@ -1005,11 +1136,13 @@ def _extract_bearer_token(request: web.Request) -> str | None:
 def _resolve_service_target(action: str, entity_id: str) -> tuple[str, str] | None:
     """Map allowed action to HA service and verify entity domain."""
     entity_domain = entity_id.split(".", maxsplit=1)[0]
-    if action == "door.open" and entity_domain == "lock":
-        return "lock", "unlock"
-    if action == "garage.open" and entity_domain == "cover":
-        return "cover", "open_cover"
-    return None
+    mapping = ACTION_SERVICE_MAP.get(action)
+    if mapping is None:
+        return None
+    expected_domain, service_name = mapping
+    if entity_domain != expected_domain:
+        return None
+    return expected_domain, service_name
 
 
 def _reject_remote_if_disallowed(
@@ -1053,6 +1186,7 @@ def _get_rate_limit_config(domain_data: dict[str, Any], bucket: str) -> tuple[in
             "action": DEFAULT_ACTION_RATE_LIMIT_PER_MIN,
             "nonce": DEFAULT_ACTION_RATE_LIMIT_PER_MIN,
             "qr": DEFAULT_QR_RATE_LIMIT_PER_MIN,
+            "states": DEFAULT_STATES_RATE_LIMIT_PER_MIN,
         }
         return defaults.get(bucket, DEFAULT_ACTION_RATE_LIMIT_PER_MIN), 60
 
@@ -1064,6 +1198,10 @@ def _get_rate_limit_config(domain_data: dict[str, Any], bucket: str) -> tuple[in
         )
     elif bucket == "qr":
         limit = int(entry_data.get(CONF_QR_RATE_LIMIT_PER_MIN, DEFAULT_QR_RATE_LIMIT_PER_MIN))
+    elif bucket == "states":
+        limit = int(
+            entry_data.get(CONF_STATES_RATE_LIMIT_PER_MIN, DEFAULT_STATES_RATE_LIMIT_PER_MIN)
+        )
     else:
         limit = DEFAULT_ACTION_RATE_LIMIT_PER_MIN
     return max(limit, 1), 60

@@ -2,24 +2,20 @@ create_guest_pass:
   name: Create guest pass
   description: Generate a short-lived pairing code and protected QR payload for guest onboarding.
   fields:
-    entity:
-      name: Entity
-      description: Door or garage entity to control (lock.* for doors, cover.* for garages).
+    entities:
+      name: Entities
+      description: Entities to grant guest access to. Actions are auto-inferred from domain.
       required: true
       selector:
         entity:
+          multiple: true
           domain:
             - lock
             - cover
-    allowed_action:
-      name: Allowed action
-      description: Scoped action for the selected entity.
-      required: true
-      selector:
-        select:
-          options:
-            - door.open
-            - garage.open
+            - switch
+            - sensor
+            - climate
+            - binary_sensor
     expiration_time:
       name: Expiration time
       description: Absolute datetime or relative seconds until pass expiration.
