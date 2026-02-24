@@ -14,7 +14,6 @@ from custom_components.easy_control.token import (
     InvalidTokenError,
 )
 
-
 # ---------------------------------------------------------------------------
 # Token: multi-entity creation & verification
 # ---------------------------------------------------------------------------
