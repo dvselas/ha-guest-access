@@ -33,5 +33,67 @@
         }
       }
     }
+  },
+  "services": {
+    "create_guest_pass": {
+      "name": "Create guest pass",
+      "description": "Generate a short-lived pairing code and protected QR payload for guest onboarding.",
+      "fields": {
+        "entities": {
+          "name": "Entities",
+          "description": "Entities to grant guest access to. Actions are auto-inferred from domain."
+        },
+        "expiration_time": {
+          "name": "Expiration time",
+          "description": "Absolute datetime or relative seconds until pass expiration."
+        },
+        "show_qr_notification": {
+          "name": "Show QR notification",
+          "description": "Create a persistent notification in Home Assistant with a QR image link."
+        },
+        "require_admin_approval": {
+          "name": "Require admin approval",
+          "description": "Keep pairing pending until approved via easy_control.approve_pairing_request."
+        }
+      }
+    },
+    "revoke_all_guest_pass": {
+      "name": "Revoke all guest passes",
+      "description": "Emergency revoke that invalidates all issued guest tokens and pairing codes."
+    },
+    "revoke_guest_pass": {
+      "name": "Revoke guest pass",
+      "description": "Revoke a specific guest token by jti or all tokens for a guest_id.",
+      "fields": {
+        "jti": {
+          "name": "Token jti",
+          "description": "Revoke a specific token id."
+        },
+        "guest_id": {
+          "name": "Guest ID",
+          "description": "Revoke all known tokens for the guest."
+        }
+      }
+    },
+    "approve_pairing_request": {
+      "name": "Approve pairing request",
+      "description": "Approve a pending pairing request created with require_admin_approval.",
+      "fields": {
+        "pairing_code": {
+          "name": "Pairing code",
+          "description": "Pairing code to approve."
+        }
+      }
+    },
+    "reject_pairing_request": {
+      "name": "Reject pairing request",
+      "description": "Reject a pending pairing request.",
+      "fields": {
+        "pairing_code": {
+          "name": "Pairing code",
+          "description": "Pairing code to reject."
+        }
+      }
+    }
   }
 }
