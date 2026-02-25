@@ -53,11 +53,12 @@ EVENT_PAIRING_REJECTED = f"{DOMAIN}.{SERVICE_REJECT_PAIRING}"
 EVENT_GUEST_ACCESS_USED = "easy_control_used"
 EVENT_RATE_LIMITED = f"{DOMAIN}.rate_limited"
 PAIRING_CODE_TTL_SECONDS = 5 * 60
-ALLOWED_ENTITY_DOMAINS = ("lock", "cover", "switch", "sensor", "climate", "binary_sensor")
+ALLOWED_ENTITY_DOMAINS = ("lock", "cover", "switch", "light", "sensor", "climate", "binary_sensor")
 ALLOWED_ACTIONS = (
     "door.open",
     "garage.open",
     "switch.toggle",
+    "light.toggle",
     "climate.read",
     "sensor.read",
     "binary_sensor.read",
@@ -69,6 +70,7 @@ DOMAIN_ACTION_MAP: dict[str, str] = {
     "lock": "door.open",
     "cover": "garage.open",
     "switch": "switch.toggle",
+    "light": "light.toggle",
     "climate": "climate.read",
     "sensor": "sensor.read",
     "binary_sensor": "binary_sensor.read",
@@ -79,6 +81,7 @@ ACTION_SERVICE_MAP: dict[str, tuple[str, str]] = {
     "door.open": ("lock", "unlock"),
     "garage.open": ("cover", "open_cover"),
     "switch.toggle": ("switch", "toggle"),
+    "light.toggle": ("light", "toggle"),
 }
 DEFAULT_LOCAL_ONLY = False
 DEFAULT_ALLOWED_CIDRS = (

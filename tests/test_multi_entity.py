@@ -6,7 +6,11 @@ import time
 
 import pytest
 
-from custom_components.easy_control.const import DOMAIN_ACTION_MAP, READ_ONLY_DOMAINS
+from custom_components.easy_control.const import (
+    ACTION_SERVICE_MAP,
+    DOMAIN_ACTION_MAP,
+    READ_ONLY_DOMAINS,
+)
 from custom_components.easy_control.pairing import PairingStore
 from custom_components.easy_control.token import (
     GuestTokenManager,
@@ -26,6 +30,7 @@ def test_multi_entity_token_creation_and_verification(now_ts: int) -> None:
         {"entity_id": "lock.front_door", "allowed_action": "door.open"},
         {"entity_id": "cover.garage", "allowed_action": "garage.open"},
         {"entity_id": "switch.porch", "allowed_action": "switch.toggle"},
+        {"entity_id": "light.living_room", "allowed_action": "light.toggle"},
     ]
     token, payload = manager.create_guest_token(
         guest_id="guest-multi",
@@ -35,11 +40,12 @@ def test_multi_entity_token_creation_and_verification(now_ts: int) -> None:
         now_timestamp=now_ts,
     )
     verified = manager.verify_token(token, now_timestamp=now_ts)
-    assert len(verified.entities) == 3
+    assert len(verified.entities) == 4
     assert verified.entity_ids() == [
         "lock.front_door",
         "cover.garage",
         "switch.porch",
+        "light.living_room",
     ]
     # Backward-compat property returns first entity
     assert verified.entity_id == "lock.front_door"
@@ -241,10 +247,15 @@ def test_domain_action_map_covers_all_allowed_domains() -> None:
         assert domain in DOMAIN_ACTION_MAP, f"Missing DOMAIN_ACTION_MAP for {domain}"
 
 
+def test_light_domain_mapping() -> None:
+    """Light domain maps to light.toggle and dispatches to light.toggle service."""
+    assert DOMAIN_ACTION_MAP["light"] == "light.toggle"
+    assert ACTION_SERVICE_MAP["light.toggle"] == ("light", "toggle")
+    assert "light" not in READ_ONLY_DOMAINS
+
+
 def test_read_only_domains_are_not_in_action_service_map() -> None:
     """Read-only domains should NOT have entries in ACTION_SERVICE_MAP."""
-    from custom_components.easy_control.const import ACTION_SERVICE_MAP
-
     for domain in READ_ONLY_DOMAINS:
         action = DOMAIN_ACTION_MAP[domain]
         assert action not in ACTION_SERVICE_MAP, (
