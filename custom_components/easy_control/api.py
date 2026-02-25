@@ -314,9 +314,11 @@ class GuestAccessPairView(HomeAssistantView):
         return self.json(
             {
                 "guest_token": guest_token,
-                "entities": list(token_payload.entities),
+                "entities": token_payload.to_dict()["entities"],
                 "allowed_actions": [
-                    e["allowed_action"] for e in token_payload.entities
+                    a
+                    for e in token_payload.entities
+                    for a in e.get("allowed_actions", [])
                 ],
                 "entity_id": token_payload.entity_id,
                 "expires_at": token_payload.exp,
@@ -519,9 +521,11 @@ class GuestAccessTokenValidateView(HomeAssistantView):
         return self.json(
             {
                 "guest_id": token_payload.guest_id,
-                "entities": list(token_payload.entities),
+                "entities": token_payload.to_dict()["entities"],
                 "allowed_actions": [
-                    e["allowed_action"] for e in token_payload.entities
+                    a
+                    for e in token_payload.entities
+                    for a in e.get("allowed_actions", [])
                 ],
                 "entity_id": token_payload.entity_id,
                 "expires_at": token_payload.exp,
@@ -673,8 +677,8 @@ class GuestAccessActionView(HomeAssistantView):
             entity_id = token_payload.entity_id
 
         # Validate entity_id is in token scope and action matches
-        granted_action = token_payload.allowed_action_for(entity_id)
-        if granted_action is None:
+        granted_actions = token_payload.allowed_actions_for(entity_id)
+        if not granted_actions:
             return self.json(
                 {
                     "success": False,
@@ -683,7 +687,7 @@ class GuestAccessActionView(HomeAssistantView):
                 },
                 status_code=403,
             )
-        if action != granted_action:
+        if action not in granted_actions:
             return self.json(
                 {
                     "success": False,

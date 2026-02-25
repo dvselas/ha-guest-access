@@ -91,15 +91,16 @@ class GuestTokenPayload:
     """Typed payload for guest access tokens.
 
     ``entities`` is a tuple of dicts, each with ``entity_id`` and
-    ``allowed_action``.  Backward-compat properties ``entity_id`` and
-    ``allowed_action`` return the first entry's values.
+    ``allowed_actions`` (list of action strings).  Backward-compat
+    properties ``entity_id`` and ``allowed_action`` return the first
+    entry's values.
     """
 
     iss: str
     aud: str
     jti: str
     guest_id: str
-    entities: tuple[dict[str, str], ...]
+    entities: tuple[dict[str, Any], ...]
     iat: int
     nbf: int
     exp: int
@@ -117,8 +118,12 @@ class GuestTokenPayload:
 
     @property
     def allowed_action(self) -> str:
-        """Return allowed_action of the first entity grant."""
-        return self.entities[0]["allowed_action"]
+        """Return first allowed_action of the first entity grant."""
+        actions = self.entities[0].get("allowed_actions", [])
+        if actions:
+            return actions[0]
+        # Legacy fallback
+        return self.entities[0].get("allowed_action", "")
 
     # -- helpers -------------------------------------------------------------
 
@@ -126,21 +131,47 @@ class GuestTokenPayload:
         """Return all entity IDs in this token."""
         return [e["entity_id"] for e in self.entities]
 
-    def allowed_action_for(self, entity_id: str) -> str | None:
-        """Return the allowed action for *entity_id*, or ``None``."""
+    def allowed_actions_for(self, entity_id: str) -> list[str]:
+        """Return list of allowed actions for *entity_id*."""
         for grant in self.entities:
             if grant["entity_id"] == entity_id:
-                return grant["allowed_action"]
-        return None
+                actions = grant.get("allowed_actions")
+                if isinstance(actions, list):
+                    return actions
+                # Legacy single-action fallback
+                act = grant.get("allowed_action", "")
+                return [act] if act else []
+        return []
+
+    def allowed_action_for(self, entity_id: str) -> str | None:
+        """Return the first allowed action for *entity_id*, or ``None``."""
+        actions = self.allowed_actions_for(entity_id)
+        return actions[0] if actions else None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert payload to serializable dictionary."""
+        # Normalize entities to always include allowed_actions
+        serialized_entities = []
+        for grant in self.entities:
+            entry: dict[str, Any] = {"entity_id": grant["entity_id"]}
+            actions = grant.get("allowed_actions")
+            if isinstance(actions, list):
+                entry["allowed_actions"] = actions
+                # Backward-compat: singular field = first action
+                entry["allowed_action"] = actions[0] if actions else ""
+            else:
+                # Legacy grant
+                act = grant.get("allowed_action", "")
+                entry["allowed_actions"] = [act] if act else []
+                entry["allowed_action"] = act
+            serialized_entities.append(entry)
+
         payload: dict[str, Any] = {
             "iss": self.iss,
             "aud": self.aud,
             "jti": self.jti,
             "guest_id": self.guest_id,
-            "entities": list(self.entities),
+            "entities": serialized_entities,
             # Backward-compat singular fields (first entity):
             "entity_id": self.entity_id,
             "allowed_action": self.allowed_action,
@@ -160,7 +191,8 @@ class GuestTokenPayload:
     def from_dict(cls, data: dict[str, Any]) -> GuestTokenPayload:
         """Validate and construct payload from dictionary.
 
-        Supports both multi-entity (``entities`` array) and legacy
+        Supports multi-entity with ``allowed_actions`` (list), legacy
+        multi-entity with ``allowed_action`` (string), and legacy
         single-entity (``entity_id`` + ``allowed_action``) tokens.
         """
         iss = data.get("iss")
@@ -190,21 +222,33 @@ class GuestTokenPayload:
         if raw_entities is not None:
             if not isinstance(raw_entities, list) or not raw_entities:
                 raise InvalidTokenError("entities must be a non-empty list")
-            parsed: list[dict[str, str]] = []
+            parsed: list[dict[str, Any]] = []
             for idx, entry in enumerate(raw_entities):
                 if not isinstance(entry, dict):
                     raise InvalidTokenError(f"entities[{idx}] must be a dict")
                 eid = entry.get("entity_id")
-                eact = entry.get("allowed_action")
                 if not isinstance(eid, str) or not eid:
                     raise InvalidTokenError(
                         f"entities[{idx}].entity_id must be a non-empty string"
                     )
-                if not isinstance(eact, str) or not eact:
-                    raise InvalidTokenError(
-                        f"entities[{idx}].allowed_action must be a non-empty string"
-                    )
-                parsed.append({"entity_id": eid, "allowed_action": eact})
+                # Prefer allowed_actions (list), fall back to allowed_action (str)
+                raw_actions = entry.get("allowed_actions")
+                if isinstance(raw_actions, list) and raw_actions:
+                    for aidx, a in enumerate(raw_actions):
+                        if not isinstance(a, str) or not a:
+                            raise InvalidTokenError(
+                                f"entities[{idx}].allowed_actions[{aidx}] "
+                                "must be a non-empty string"
+                            )
+                    parsed.append({"entity_id": eid, "allowed_actions": raw_actions})
+                else:
+                    eact = entry.get("allowed_action")
+                    if not isinstance(eact, str) or not eact:
+                        raise InvalidTokenError(
+                            f"entities[{idx}].allowed_action must be a "
+                            "non-empty string"
+                        )
+                    parsed.append({"entity_id": eid, "allowed_actions": [eact]})
             entities = tuple(parsed)
         else:
             # Legacy single-entity token
@@ -214,7 +258,9 @@ class GuestTokenPayload:
                 raise InvalidTokenError("entity_id must be a non-empty string")
             if not isinstance(allowed_action, str) or not allowed_action:
                 raise InvalidTokenError("allowed_action must be a non-empty string")
-            entities = ({"entity_id": entity_id, "allowed_action": allowed_action},)
+            entities = (
+                {"entity_id": entity_id, "allowed_actions": [allowed_action]},
+            )
 
         if not isinstance(iat, int):
             raise InvalidTokenError("iat must be an integer Unix timestamp")
@@ -307,7 +353,7 @@ class GuestTokenManager:
         self,
         *,
         guest_id: str,
-        entities: list[dict[str, str]] | None = None,
+        entities: list[dict[str, Any]] | None = None,
         expires_at: int,
         token_version: int,
         max_uses: int = DEFAULT_TOKEN_MAX_USES,
@@ -320,9 +366,10 @@ class GuestTokenManager:
     ) -> tuple[str, GuestTokenPayload]:
         """Create token with full hardened payload.
 
-        Pass ``entities`` as a list of ``{"entity_id": ..., "allowed_action": ...}``
-        dicts.  For backward compatibility, ``entity_id`` + ``allowed_action`` can
-        be provided instead (converted to a single-item entities list).
+        Pass ``entities`` as a list of dicts with ``entity_id`` and either
+        ``allowed_actions`` (list) or ``allowed_action`` (string, wrapped to
+        list).  For backward compatibility, ``entity_id`` + ``allowed_action``
+        can be provided instead (converted to a single-item entities list).
         """
         now = int(time.time()) if now_timestamp is None else now_timestamp
         if expires_at <= now:
@@ -333,10 +380,24 @@ class GuestTokenManager:
             raise ValueError("token_version must be greater than 0")
 
         # Resolve entities from either new or legacy params
-        resolved_entities: list[dict[str, str]] = list(entities) if entities else []
+        resolved_entities: list[dict[str, Any]] = []
+        if entities:
+            for e in entities:
+                eid = e["entity_id"]
+                actions = e.get("allowed_actions")
+                if isinstance(actions, list):
+                    resolved_entities.append(
+                        {"entity_id": eid, "allowed_actions": actions}
+                    )
+                else:
+                    # Legacy: wrap singular allowed_action in list
+                    act = e.get("allowed_action", "")
+                    resolved_entities.append(
+                        {"entity_id": eid, "allowed_actions": [act] if act else []}
+                    )
         if not resolved_entities and entity_id and allowed_action:
             resolved_entities = [
-                {"entity_id": entity_id, "allowed_action": allowed_action}
+                {"entity_id": entity_id, "allowed_actions": [allowed_action]}
             ]
         if not resolved_entities:
             raise ValueError("entities must contain at least one grant")

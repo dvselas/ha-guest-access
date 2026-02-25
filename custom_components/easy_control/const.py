@@ -55,31 +55,49 @@ EVENT_RATE_LIMITED = f"{DOMAIN}.rate_limited"
 PAIRING_CODE_TTL_SECONDS = 5 * 60
 ALLOWED_ENTITY_DOMAINS = ("lock", "cover", "switch", "light", "sensor", "climate", "binary_sensor")
 ALLOWED_ACTIONS = (
-    "door.open",
+    # Bidirectional actions (current)
+    "door.lock",
+    "door.unlock",
     "garage.open",
-    "switch.toggle",
-    "light.toggle",
+    "garage.close",
+    "switch.on",
+    "switch.off",
+    "light.on",
+    "light.off",
+    # Read-only
     "climate.read",
     "sensor.read",
     "binary_sensor.read",
+    # Legacy (backward compat with old tokens)
+    "door.open",
+    "switch.toggle",
+    "light.toggle",
 )
 READ_ONLY_DOMAINS = frozenset({"sensor", "binary_sensor", "climate"})
 
-# Maps entity domain → default allowed action (auto-inferred, not user-specified).
-DOMAIN_ACTION_MAP: dict[str, str] = {
-    "lock": "door.open",
-    "cover": "garage.open",
-    "switch": "switch.toggle",
-    "light": "light.toggle",
-    "climate": "climate.read",
-    "sensor": "sensor.read",
-    "binary_sensor": "binary_sensor.read",
+# Maps entity domain → default allowed actions (auto-inferred, not user-specified).
+DOMAIN_ACTION_MAP: dict[str, list[str]] = {
+    "lock": ["door.lock", "door.unlock"],
+    "cover": ["garage.open", "garage.close"],
+    "switch": ["switch.on", "switch.off"],
+    "light": ["light.on", "light.off"],
+    "climate": ["climate.read"],
+    "sensor": ["sensor.read"],
+    "binary_sensor": ["binary_sensor.read"],
 }
 
 # Maps (action) → (service_domain, service_name) for actionable domains.
 ACTION_SERVICE_MAP: dict[str, tuple[str, str]] = {
-    "door.open": ("lock", "unlock"),
+    "door.lock": ("lock", "lock"),
+    "door.unlock": ("lock", "unlock"),
     "garage.open": ("cover", "open_cover"),
+    "garage.close": ("cover", "close_cover"),
+    "switch.on": ("switch", "turn_on"),
+    "switch.off": ("switch", "turn_off"),
+    "light.on": ("light", "turn_on"),
+    "light.off": ("light", "turn_off"),
+    # Legacy (backward compat with old tokens)
+    "door.open": ("lock", "unlock"),
     "switch.toggle": ("switch", "toggle"),
     "light.toggle": ("light", "toggle"),
 }

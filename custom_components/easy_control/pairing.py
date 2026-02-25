@@ -22,7 +22,7 @@ class PairingRecord:
     pairing_code: str
     qr_access_token: str
     scan_ack_token: str
-    entities: tuple[dict[str, str], ...]
+    entities: tuple[dict[str, Any], ...]
     pass_expires_at: int
     pairing_expires_at: int
     created_at: int
@@ -42,8 +42,11 @@ class PairingRecord:
 
     @property
     def allowed_action(self) -> str:
-        """Return allowed_action of the first entity grant."""
-        return self.entities[0]["allowed_action"]
+        """Return first allowed_action of the first entity grant."""
+        actions = self.entities[0].get("allowed_actions", [])
+        if actions:
+            return actions[0]
+        return self.entities[0].get("allowed_action", "")
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to API/service response structure."""
@@ -72,7 +75,7 @@ class PairingStore:
         self,
         *,
         pass_expires_at: int,
-        entities: list[dict[str, str]] | None = None,
+        entities: list[dict[str, Any]] | None = None,
         require_admin_approval: bool = False,
         # Legacy single-entity convenience:
         entity_id: str | None = None,
@@ -80,15 +83,27 @@ class PairingStore:
     ) -> PairingRecord:
         """Create and store a pairing record with a 5-minute pairing window.
 
-        Pass *entities* as a list of ``{"entity_id": ..., "allowed_action": ...}``
-        dicts, or use legacy ``entity_id``/``allowed_action`` for a single entity.
+        Pass *entities* as a list of dicts with ``entity_id`` and either
+        ``allowed_actions`` (list) or ``allowed_action`` (string).  For
+        backward compat, ``entity_id`` + ``allowed_action`` can be used.
         """
         now_timestamp = int(time.time())
         self._purge_expired(now_timestamp)
 
-        resolved: list[dict[str, str]] = list(entities) if entities else []
+        resolved: list[dict[str, Any]] = []
+        if entities:
+            for e in entities:
+                eid = e["entity_id"]
+                actions = e.get("allowed_actions")
+                if isinstance(actions, list):
+                    resolved.append({"entity_id": eid, "allowed_actions": actions})
+                else:
+                    act = e.get("allowed_action", "")
+                    resolved.append(
+                        {"entity_id": eid, "allowed_actions": [act] if act else []}
+                    )
         if not resolved and entity_id and allowed_action:
-            resolved = [{"entity_id": entity_id, "allowed_action": allowed_action}]
+            resolved = [{"entity_id": entity_id, "allowed_actions": [allowed_action]}]
         if not resolved:
             raise ValueError("entities must contain at least one grant")
 

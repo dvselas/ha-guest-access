@@ -351,15 +351,15 @@ async def async_handle_reject_pairing(
 
 def _validate_and_resolve_entities(
     entity_ids: list[str],
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """Validate entity domains and auto-resolve allowed actions.
 
-    Returns a list of ``{"entity_id": ..., "allowed_action": ...}`` dicts.
+    Returns a list of ``{"entity_id": ..., "allowed_actions": [...]}`` dicts.
     """
     if not entity_ids:
         raise HomeAssistantError("At least one entity is required")
 
-    entities: list[dict[str, str]] = []
+    entities: list[dict[str, Any]] = []
     for eid in entity_ids:
         entity_domain = eid.split(".", maxsplit=1)[0]
         if entity_domain not in ALLOWED_ENTITY_DOMAINS:
@@ -368,12 +368,12 @@ def _validate_and_resolve_entities(
                 f"Unsupported entity domain '{entity_domain}'. "
                 f"Allowed: {allowed_domains}"
             )
-        action = DOMAIN_ACTION_MAP.get(entity_domain)
-        if action is None:
+        actions = DOMAIN_ACTION_MAP.get(entity_domain)
+        if actions is None:
             raise HomeAssistantError(
                 f"No action mapping for domain '{entity_domain}'"
             )
-        entities.append({"entity_id": eid, "allowed_action": action})
+        entities.append({"entity_id": eid, "allowed_actions": actions})
     return entities
 
 
