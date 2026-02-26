@@ -71,8 +71,6 @@ def _make_call(data: dict) -> MagicMock:
 
 def test_generate_qr_png_base64_returns_base64_string() -> None:
     """QR PNG helper returns a non-empty base64 string when segno is available."""
-    import io as _io
-
     fake_png = b"\x89PNG\r\n\x1a\nfake-png-data"
     mock_qr = MagicMock()
     mock_qr.save = MagicMock(side_effect=lambda buf, **kw: buf.write(fake_png))
