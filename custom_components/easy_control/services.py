@@ -172,13 +172,18 @@ def _generate_qr_png_base64(qr_string: str) -> str | None:
 def _build_email_html(
     *,
     qr_base64: str | None,
-    deep_link: str,
+    email_link: str,
     guest_name: str | None,
     entity_ids: list[str],
     expires_at: int,
     pairing_code: str,
 ) -> str:
-    """Build an HTML email body with inline QR code and deep link."""
+    """Build an HTML email body with inline QR code and HTTPS redirect link.
+
+    ``email_link`` should be an HTTPS URL pointing to the
+    ``/api/easy_control/link`` redirect page so that email clients don't
+    strip the link (custom URL schemes are blocked by most email clients).
+    """
     greeting = f"Hi {guest_name}," if guest_name else "Hi,"
     expires_dt = datetime.fromtimestamp(expires_at, tz=UTC)
     expires_str = expires_dt.strftime("%Y-%m-%d %H:%M UTC")
@@ -208,7 +213,7 @@ def _build_email_html(
         "<p>Scan the QR code above with the Easy Control app, or tap the link below "
         "on your iPhone:</p>"
         '<p style="text-align:center;margin:20px 0;">'
-        f'<a href="{deep_link}" style="display:inline-block;padding:14px 28px;'
+        f'<a href="{email_link}" style="display:inline-block;padding:14px 28px;'
         "background-color:#007AFF;color:#ffffff;text-decoration:none;"
         'border-radius:12px;font-weight:600;">Open in Easy Control</a></p>'
         f'<p style="color:#888;font-size:13px;">Fallback pairing code: '
@@ -300,9 +305,19 @@ async def async_handle_create_pass(
     email_sent = False
     if email_recipient and email_notify_service:
         qr_base64 = _generate_qr_png_base64(qr_string)
+        redirect_query = urlencode(
+            {
+                "code": pairing.pairing_code,
+                "base_url": base_url,
+                "scan_ack_token": pairing.scan_ack_token,
+                "entity_ids": entity_ids_csv,
+                "allowed_action": pairing.allowed_action,
+            }
+        )
+        email_link = f"{base_url}/api/easy_control/link?{redirect_query}"
         email_html = _build_email_html(
             qr_base64=qr_base64,
-            deep_link=qr_string,
+            email_link=email_link,
             guest_name=email_guest_name,
             entity_ids=[e["entity_id"] for e in entities],
             expires_at=pass_expires_at,

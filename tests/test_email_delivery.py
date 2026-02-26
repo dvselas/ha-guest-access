@@ -97,12 +97,12 @@ def test_generate_qr_png_base64_without_segno() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_email_html_contains_deep_link() -> None:
-    """HTML body contains the clickable deep link."""
-    link = "easy-control://pair?pairing_code=ABC123&base_url=https%3A%2F%2Fha.local"
+def test_email_html_contains_email_link() -> None:
+    """HTML body contains the clickable HTTPS redirect link."""
+    link = "https://ha.local/api/easy_control/link?code=ABC123"
     html = _build_email_html(
         qr_base64=None,
-        deep_link=link,
+        email_link=link,
         guest_name=None,
         entity_ids=["lock.front_door"],
         expires_at=int(time.time()) + 3600,
@@ -116,7 +116,7 @@ def test_email_html_contains_qr_image() -> None:
     """HTML body embeds the QR code as data URI when provided."""
     html = _build_email_html(
         qr_base64="AAAA1234",
-        deep_link="easy-control://pair?code=X",
+        email_link="easy-control://pair?code=X",
         guest_name=None,
         entity_ids=["lock.front_door"],
         expires_at=int(time.time()) + 3600,
@@ -129,7 +129,7 @@ def test_email_html_omits_qr_when_none() -> None:
     """HTML body has no img tag when qr_base64 is None."""
     html = _build_email_html(
         qr_base64=None,
-        deep_link="easy-control://pair?code=X",
+        email_link="easy-control://pair?code=X",
         guest_name=None,
         entity_ids=["lock.front_door"],
         expires_at=int(time.time()) + 3600,
@@ -142,7 +142,7 @@ def test_email_html_contains_entity_ids() -> None:
     """HTML body lists all granted entity IDs."""
     html = _build_email_html(
         qr_base64=None,
-        deep_link="easy-control://pair?code=X",
+        email_link="easy-control://pair?code=X",
         guest_name=None,
         entity_ids=["lock.front_door", "cover.garage", "light.porch"],
         expires_at=int(time.time()) + 3600,
@@ -157,7 +157,7 @@ def test_email_html_personalized_with_guest_name() -> None:
     """HTML greeting uses the guest name when provided."""
     html = _build_email_html(
         qr_base64=None,
-        deep_link="easy-control://pair?code=X",
+        email_link="easy-control://pair?code=X",
         guest_name="Alice",
         entity_ids=["lock.front_door"],
         expires_at=int(time.time()) + 3600,
@@ -170,7 +170,7 @@ def test_email_html_generic_greeting_without_guest_name() -> None:
     """HTML greeting is generic when guest name is not provided."""
     html = _build_email_html(
         qr_base64=None,
-        deep_link="easy-control://pair?code=X",
+        email_link="easy-control://pair?code=X",
         guest_name=None,
         entity_ids=["lock.front_door"],
         expires_at=int(time.time()) + 3600,
@@ -184,7 +184,7 @@ def test_email_html_contains_pairing_code() -> None:
     """HTML body includes the fallback pairing code."""
     html = _build_email_html(
         qr_base64=None,
-        deep_link="easy-control://pair?code=X",
+        email_link="easy-control://pair?code=X",
         guest_name=None,
         entity_ids=["lock.front_door"],
         expires_at=int(time.time()) + 3600,
@@ -230,7 +230,7 @@ async def test_create_pass_with_email_calls_notify_service(
     payload = call_args[0][2]
     assert payload["target"] == "guest@example.com"
     assert "html" in payload["data"]
-    assert "easy-control://pair?" in payload["data"]["html"]
+    assert "/api/easy_control/link?" in payload["data"]["html"]
     assert "Bob" in payload["data"]["html"]
 
 

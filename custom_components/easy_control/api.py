@@ -1061,6 +1061,99 @@ class GuestAccessEntityStatesView(HomeAssistantView):
         return self.json({"entities": entity_states})
 
 
+class GuestAccessDeepLinkRedirectView(HomeAssistantView):
+    """HTTPS redirect page that bounces to the easy-control:// deep link.
+
+    Email clients strip custom URL schemes for security, so emails link here
+    instead. This page immediately redirects to the native app via JavaScript
+    and provides a manual fallback link + pairing code.
+    """
+
+    url = "/api/easy_control/link"
+    name = "api:easy_control:link"
+    requires_auth = False
+
+    async def get(self, request: web.Request) -> web.Response:
+        """Render an HTML page that redirects to the deep link."""
+        hass: HomeAssistant = request.app[KEY_HASS]
+        domain_data: dict[str, Any] = hass.data.get(DOMAIN, {})
+
+        pairing_code = request.query.get("code", "")
+        if not pairing_code:
+            return web.Response(
+                text="Missing required query parameter: code",
+                status=400,
+                content_type="text/plain",
+                headers=NO_STORE_HEADERS,
+            )
+
+        rate_limit_error = _rate_limit_request(
+            hass,
+            domain_data,
+            request=request,
+            bucket="qr",
+            extra_keys=[pairing_code],
+        )
+        if rate_limit_error is not None:
+            return rate_limit_error
+
+        base_url = request.query.get("base_url", "")
+        scan_ack_token = request.query.get("scan_ack_token", "")
+        entity_ids = request.query.get("entity_ids", "")
+        allowed_action = request.query.get("allowed_action", "")
+
+        deep_link_params: dict[str, str] = {
+            "pairing_code": pairing_code,
+            "code": pairing_code,
+        }
+        if base_url:
+            deep_link_params["base_url"] = base_url
+        if scan_ack_token:
+            deep_link_params["scan_ack_token"] = scan_ack_token
+        if entity_ids:
+            deep_link_params["entity_ids"] = entity_ids
+        if allowed_action:
+            deep_link_params["allowed_action"] = allowed_action
+
+        deep_link = "easy-control://pair?" + urlencode(deep_link_params)
+
+        import html as html_mod
+
+        safe_code = html_mod.escape(pairing_code)
+        safe_deep_link = html_mod.escape(deep_link)
+
+        redirect_html = f"""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Open in Easy Control</title>
+<script>window.location.href={json.dumps(deep_link)};</script>
+</head>
+<body style="font-family:-apple-system,system-ui,sans-serif;text-align:center;\
+padding:60px 20px;background:#f5f5f7;color:#1d1d1f;">
+<h1 style="font-size:24px;font-weight:600;">Opening Easy Control&hellip;</h1>
+<p style="color:#86868b;">If the app does not open automatically:</p>
+<p style="margin:24px 0;">
+<a href="{safe_deep_link}" style="display:inline-block;padding:14px 28px;\
+background-color:#007AFF;color:#fff;text-decoration:none;border-radius:12px;\
+font-weight:600;">Open in Easy Control</a>
+</p>
+<p style="color:#86868b;font-size:14px;">
+Or enter this code manually in the app:<br>
+<strong style="font-size:20px;letter-spacing:2px;color:#1d1d1f;">\
+{safe_code}</strong>
+</p>
+</body>
+</html>"""
+        return web.Response(
+            text=redirect_html,
+            content_type="text/html",
+            headers=NO_STORE_HEADERS,
+        )
+
+
 def async_register_api(hass: HomeAssistant) -> None:
     """Register HA Easy Control HTTP API views exactly once."""
     domain_data = hass.data.setdefault(DOMAIN, {})
@@ -1074,6 +1167,7 @@ def async_register_api(hass: HomeAssistant) -> None:
     hass.http.register_view(GuestAccessActionView)
     hass.http.register_view(GuestAccessQrView)
     hass.http.register_view(GuestAccessEntityStatesView)
+    hass.http.register_view(GuestAccessDeepLinkRedirectView)
     domain_data[DATA_API_REGISTERED] = True
 
 
