@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import base64
+import io
+import logging
+from datetime import UTC, datetime
 from typing import Any, cast
 from urllib.parse import urlencode
 
@@ -17,6 +20,9 @@ from .const import (
     ALLOWED_ENTITY_DOMAINS,
     CONF_ACTIVE_KID,
     CONF_DEFAULT_REQUIRE_ADMIN_APPROVAL,
+    CONF_EMAIL_GUEST_NAME,
+    CONF_EMAIL_NOTIFY_SERVICE,
+    CONF_EMAIL_RECIPIENT,
     CONF_ENTITIES,
     CONF_EXPIRATION_TIME,
     CONF_REQUIRE_ADMIN_APPROVAL,
@@ -48,12 +54,17 @@ from .storage import (
 )
 from .token import GuestTokenManager
 
+_LOGGER = logging.getLogger(__name__)
+
 SERVICE_CREATE_PASS_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_ENTITIES): vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Required(CONF_EXPIRATION_TIME): vol.Any(cv.positive_int, cv.datetime),
         vol.Optional(CONF_SHOW_QR_NOTIFICATION, default=True): bool,
         vol.Optional(CONF_REQUIRE_ADMIN_APPROVAL): bool,
+        vol.Optional(CONF_EMAIL_RECIPIENT): cv.string,
+        vol.Optional(CONF_EMAIL_NOTIFY_SERVICE): cv.string,
+        vol.Optional(CONF_EMAIL_GUEST_NAME): cv.string,
     }
 )
 
@@ -141,6 +152,71 @@ def async_unregister_services(hass: HomeAssistant) -> None:
         hass.services.async_remove(DOMAIN, SERVICE_REJECT_PAIRING)
 
 
+def _generate_qr_png_base64(qr_string: str) -> str | None:
+    """Generate a PNG QR code as a base64-encoded string.
+
+    Returns ``None`` if ``segno`` is not installed.
+    """
+    try:
+        import segno  # noqa: PLC0415 — lazy import, same pattern as api.py
+    except ModuleNotFoundError:
+        _LOGGER.warning("segno not installed; email will be sent without QR image")
+        return None
+
+    qr = segno.make(qr_string, error="m")
+    png_buf = io.BytesIO()
+    qr.save(png_buf, kind="png", scale=8, border=2, dark="#000000", light="#ffffff")
+    return base64.b64encode(png_buf.getvalue()).decode("ascii")
+
+
+def _build_email_html(
+    *,
+    qr_base64: str | None,
+    deep_link: str,
+    guest_name: str | None,
+    entity_ids: list[str],
+    expires_at: int,
+    pairing_code: str,
+) -> str:
+    """Build an HTML email body with inline QR code and deep link."""
+    greeting = f"Hi {guest_name}," if guest_name else "Hi,"
+    expires_dt = datetime.fromtimestamp(expires_at, tz=UTC)
+    expires_str = expires_dt.strftime("%Y-%m-%d %H:%M UTC")
+    entity_list = "".join(f"<li>{eid}</li>" for eid in entity_ids)
+
+    qr_section = ""
+    if qr_base64:
+        qr_section = (
+            '<div style="text-align:center;margin:24px 0;">'
+            '<img src="data:image/png;base64,' + qr_base64 + '" '
+            'alt="Guest Access QR Code" '
+            'style="width:240px;height:240px;image-rendering:pixelated;" />'
+            "</div>"
+        )
+
+    return (
+        "<!DOCTYPE html>"
+        '<html><head><meta charset="utf-8"></head>'
+        '<body style="font-family:-apple-system,Helvetica,Arial,sans-serif;'
+        'max-width:480px;margin:0 auto;padding:24px;color:#222;">'
+        f"<h2 style=\"margin-top:0;\">Guest Access Pass</h2>"
+        f"<p>{greeting}</p>"
+        "<p>You have been granted guest access to the following devices:</p>"
+        f'<ul style="padding-left:20px;">{entity_list}</ul>'
+        f"<p><strong>Expires:</strong> {expires_str}</p>"
+        f"{qr_section}"
+        "<p>Scan the QR code above with the Easy Control app, or tap the link below "
+        "on your iPhone:</p>"
+        '<p style="text-align:center;margin:20px 0;">'
+        f'<a href="{deep_link}" style="display:inline-block;padding:14px 28px;'
+        "background-color:#007AFF;color:#ffffff;text-decoration:none;"
+        'border-radius:12px;font-weight:600;">Open in Easy Control</a></p>'
+        f'<p style="color:#888;font-size:13px;">Fallback pairing code: '
+        f"<code>{pairing_code}</code></p>"
+        "</body></html>"
+    )
+
+
 async def async_handle_create_pass(
     hass: HomeAssistant, call: ServiceCall
 ) -> ServiceResponse:
@@ -153,6 +229,14 @@ async def async_handle_create_pass(
     entity_ids_raw: list[str] = call.data[CONF_ENTITIES]
     expiration_time = call.data[CONF_EXPIRATION_TIME]
     show_qr_notification = bool(call.data[CONF_SHOW_QR_NOTIFICATION])
+    email_recipient: str | None = call.data.get(CONF_EMAIL_RECIPIENT)
+    email_notify_service: str | None = call.data.get(CONF_EMAIL_NOTIFY_SERVICE)
+    email_guest_name: str | None = call.data.get(CONF_EMAIL_GUEST_NAME)
+
+    if bool(email_recipient) != bool(email_notify_service):
+        raise HomeAssistantError(
+            "Both email_recipient and email_notify_service must be provided together"
+        )
     entry_data = _get_active_entry_data(domain_data)
     default_require_admin_approval = False
     if isinstance(entry_data, dict):
@@ -213,12 +297,54 @@ async def async_handle_create_pass(
             blocking=False,
         )
 
+    email_sent = False
+    if email_recipient and email_notify_service:
+        qr_base64 = _generate_qr_png_base64(qr_string)
+        email_html = _build_email_html(
+            qr_base64=qr_base64,
+            deep_link=qr_string,
+            guest_name=email_guest_name,
+            entity_ids=[e["entity_id"] for e in entities],
+            expires_at=pass_expires_at,
+            pairing_code=pairing.pairing_code,
+        )
+        notify_service = email_notify_service
+        if notify_service.startswith("notify."):
+            notify_service = notify_service[len("notify."):]
+        if hass.services.has_service("notify", notify_service):
+            try:
+                await hass.services.async_call(
+                    "notify",
+                    notify_service,
+                    {
+                        "title": "HA Easy Control — Guest Access Pass",
+                        "message": (
+                            "You have been granted guest access. "
+                            f"Pairing code: {pairing.pairing_code}"
+                        ),
+                        "target": email_recipient,
+                        "data": {"html": email_html},
+                    },
+                    blocking=False,
+                )
+                email_sent = True
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "Failed to send guest pass email via notify.%s", notify_service
+                )
+        else:
+            _LOGGER.warning(
+                "Email notify service 'notify.%s' not found; skipping email",
+                notify_service,
+            )
+
     return {
         **pairing.to_dict(),
         "qr_string": qr_string,
         "qr_image_path": qr_image_path,
         "qr_image_url": qr_image_url,
         "base_url": base_url,
+        "email_sent": email_sent,
     }
 
 

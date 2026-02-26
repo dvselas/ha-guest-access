@@ -36,6 +36,24 @@ create_guest_pass:
       required: false
       selector:
         boolean:
+    email_recipient:
+      name: Email recipient
+      description: Email address to send the guest pass to. Requires email_notify_service.
+      required: false
+      selector:
+        text:
+    email_notify_service:
+      name: Email notify service
+      description: "HA notify service for email delivery (e.g. 'email' for notify.email)."
+      required: false
+      selector:
+        text:
+    email_guest_name:
+      name: Guest name
+      description: Optional guest name to personalize the email.
+      required: false
+      selector:
+        text:
 
 revoke_all_guest_pass:
   name: Revoke all guest passes

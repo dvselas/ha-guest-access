@@ -54,6 +54,18 @@
         "require_admin_approval": {
           "name": "Require admin approval",
           "description": "Keep pairing pending until approved via easy_control.approve_pairing_request."
+        },
+        "email_recipient": {
+          "name": "Email recipient",
+          "description": "Email address to send the guest pass to. Requires email_notify_service."
+        },
+        "email_notify_service": {
+          "name": "Email notify service",
+          "description": "HA notify service for email delivery (e.g. 'email' for notify.email)."
+        },
+        "email_guest_name": {
+          "name": "Guest name",
+          "description": "Optional guest name to personalize the email."
         }
       }
     },
