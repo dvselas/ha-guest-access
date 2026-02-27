@@ -336,10 +336,11 @@ def test_bidirectional_switch_actions() -> None:
 
 
 def test_bidirectional_light_actions() -> None:
-    """Light domain has on and off actions."""
-    assert DOMAIN_ACTION_MAP["light"] == ["light.on", "light.off"]
+    """Light domain has on, off, and set_brightness actions."""
+    assert DOMAIN_ACTION_MAP["light"] == ["light.on", "light.off", "light.set_brightness"]
     assert ACTION_SERVICE_MAP["light.on"] == ("light", "turn_on")
     assert ACTION_SERVICE_MAP["light.off"] == ("light", "turn_off")
+    assert ACTION_SERVICE_MAP["light.set_brightness"] == ("light", "turn_on")
     assert "light" not in READ_ONLY_DOMAINS
 
 

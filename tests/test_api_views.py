@@ -13,6 +13,7 @@ from homeassistant.components.http import KEY_HASS
 from custom_components.easy_control.api import (
     GuestAccessActionNonceView,
     GuestAccessActionView,
+    GuestAccessEntityStatesView,
     GuestAccessPairScannedView,
     GuestAccessPairView,
     GuestAccessQrView,
@@ -26,6 +27,7 @@ from custom_components.easy_control.const import (
     CONF_QR_RATE_LIMIT_PER_MIN,
     CONF_REQUIRE_ACTION_PROOF,
     CONF_REQUIRE_DEVICE_BINDING,
+    CONF_STATES_RATE_LIMIT_PER_MIN,
     CONF_TOKEN_VERSION,
     DATA_CONFIG_ENTRIES,
     DATA_NONCE_STORE,
@@ -645,3 +647,389 @@ async def test_pair_response_includes_scan_ack_supported(
 
     assert response.status == 200
     assert body["scan_ack_supported"] is True
+
+
+# ---------------------------------------------------------------------------
+# Brightness: light.set_brightness action
+# ---------------------------------------------------------------------------
+
+
+class _FakeState:
+    """Minimal HA state object for testing."""
+
+    def __init__(self, state: str, attributes: dict[str, Any] | None = None) -> None:
+        self.state = state
+        self.attributes = attributes or {}
+
+
+class _FakeStates:
+    """Minimal HA states registry for testing."""
+
+    def __init__(self, states: dict[str, _FakeState] | None = None) -> None:
+        self._states = states or {}
+
+    def get(self, entity_id: str) -> _FakeState | None:
+        return self._states.get(entity_id)
+
+
+class _FakeHassWithStates(_FakeHass):
+    """_FakeHass extended with a states registry."""
+
+    def __init__(
+        self,
+        domain_data: dict[str, Any],
+        states: dict[str, _FakeState] | None = None,
+    ) -> None:
+        super().__init__(domain_data)
+        self.states = _FakeStates(states)
+
+
+@pytest.mark.asyncio
+async def test_brightness_action_passes_brightness_pct(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
+    """light.set_brightness passes brightness_pct to light.turn_on service."""
+    domain_data = _build_domain_data()
+    token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
+    token, _payload = token_manager.create_guest_token(
+        guest_id="guest-dimmer",
+        entities=[
+            {
+                "entity_id": "light.living_room",
+                "allowed_actions": ["light.on", "light.off", "light.set_brightness"],
+            },
+        ],
+        expires_at=now_ts + 600,
+        token_version=1,
+        now_timestamp=now_ts,
+    )
+    hass = _FakeHass(domain_data)
+
+    async def _fake_use_count(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 0
+
+    async def _fake_is_revoked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return False
+
+    async def _fake_record_use(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 1
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _fake_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_record_token_use",
+        _fake_record_use,
+    )
+
+    request = _FakeRequest(
+        hass=hass,
+        headers={"Authorization": f"Bearer {token}"},
+        json_payload={
+            "action": "light.set_brightness",
+            "entity_id": "light.living_room",
+            "brightness_pct": 64,
+        },
+        path="/api/easy_control/action",
+    )
+    response = await GuestAccessActionView().post(request)
+    body = _json_body(response)
+
+    assert response.status == 200
+    assert body["success"] is True
+    assert body["action"] == "light.set_brightness"
+    assert len(hass.services.calls) == 1
+    domain, service, data = hass.services.calls[0]
+    assert domain == "light"
+    assert service == "turn_on"
+    assert data == {"entity_id": "light.living_room", "brightness_pct": 64}
+
+
+@pytest.mark.asyncio
+async def test_brightness_pct_clamped_to_0_100(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
+    """brightness_pct is clamped to [0, 100]."""
+    domain_data = _build_domain_data()
+    token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
+    token, _payload = token_manager.create_guest_token(
+        guest_id="guest-clamp",
+        entities=[
+            {
+                "entity_id": "light.living_room",
+                "allowed_actions": ["light.set_brightness"],
+            },
+        ],
+        expires_at=now_ts + 600,
+        token_version=1,
+        now_timestamp=now_ts,
+    )
+    hass = _FakeHass(domain_data)
+
+    async def _fake_use_count(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 0
+
+    async def _fake_is_revoked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return False
+
+    async def _fake_record_use(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 1
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _fake_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_record_token_use",
+        _fake_record_use,
+    )
+
+    # Test value > 100 → clamped to 100
+    request = _FakeRequest(
+        hass=hass,
+        headers={"Authorization": f"Bearer {token}"},
+        json_payload={
+            "action": "light.set_brightness",
+            "entity_id": "light.living_room",
+            "brightness_pct": 150,
+        },
+        path="/api/easy_control/action",
+    )
+    response = await GuestAccessActionView().post(request)
+    assert response.status == 200
+    _, _, data = hass.services.calls[0]
+    assert data["brightness_pct"] == 100
+
+    # Test value < 0 → clamped to 0
+    request = _FakeRequest(
+        hass=hass,
+        headers={"Authorization": f"Bearer {token}"},
+        json_payload={
+            "action": "light.set_brightness",
+            "entity_id": "light.living_room",
+            "brightness_pct": -20,
+        },
+        path="/api/easy_control/action",
+    )
+    response = await GuestAccessActionView().post(request)
+    assert response.status == 200
+    _, _, data = hass.services.calls[1]
+    assert data["brightness_pct"] == 0
+
+
+@pytest.mark.asyncio
+async def test_brightness_action_without_pct_omits_brightness(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
+    """light.set_brightness without brightness_pct only passes entity_id."""
+    domain_data = _build_domain_data()
+    token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
+    token, _payload = token_manager.create_guest_token(
+        guest_id="guest-no-pct",
+        entities=[
+            {
+                "entity_id": "light.living_room",
+                "allowed_actions": ["light.set_brightness"],
+            },
+        ],
+        expires_at=now_ts + 600,
+        token_version=1,
+        now_timestamp=now_ts,
+    )
+    hass = _FakeHass(domain_data)
+
+    async def _fake_use_count(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 0
+
+    async def _fake_is_revoked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return False
+
+    async def _fake_record_use(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 1
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _fake_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_record_token_use",
+        _fake_record_use,
+    )
+
+    request = _FakeRequest(
+        hass=hass,
+        headers={"Authorization": f"Bearer {token}"},
+        json_payload={
+            "action": "light.set_brightness",
+            "entity_id": "light.living_room",
+        },
+        path="/api/easy_control/action",
+    )
+    response = await GuestAccessActionView().post(request)
+    assert response.status == 200
+    _, _, data = hass.services.calls[0]
+    assert data == {"entity_id": "light.living_room"}
+
+
+# ---------------------------------------------------------------------------
+# States: brightness attributes for light entities
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_states_view_returns_brightness_attributes_for_lights(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
+    """States endpoint includes brightness attrs for light entities."""
+    domain_data = _build_domain_data()
+    token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
+    domain_data["entry-1"][CONF_STATES_RATE_LIMIT_PER_MIN] = 60
+    token, _payload = token_manager.create_guest_token(
+        guest_id="guest-states",
+        entities=[
+            {
+                "entity_id": "light.living_room",
+                "allowed_actions": ["light.on", "light.off", "light.set_brightness"],
+            },
+        ],
+        expires_at=now_ts + 600,
+        token_version=1,
+        now_timestamp=now_ts,
+    )
+
+    fake_states = {
+        "light.living_room": _FakeState(
+            state="on",
+            attributes={
+                "friendly_name": "Living Room",
+                "brightness": 191,
+                "supported_color_modes": ["brightness"],
+                "supported_features": 0,
+            },
+        ),
+    }
+    hass = _FakeHassWithStates(domain_data, states=fake_states)
+
+    async def _fake_use_count(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 0
+
+    async def _fake_is_revoked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return False
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _fake_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
+
+    request = _FakeRequest(
+        hass=hass,
+        headers={"Authorization": f"Bearer {token}"},
+        path="/api/easy_control/states",
+        method="GET",
+    )
+    response = await GuestAccessEntityStatesView().get(request)
+    body = _json_body(response)
+
+    assert response.status == 200
+    entities = body["entities"]
+    assert len(entities) == 1
+    light = entities[0]
+    assert light["entity_id"] == "light.living_room"
+    assert light["state"] == "on"
+    assert light["brightness"] == 191
+    assert light["supported_color_modes"] == ["brightness"]
+    assert "brightness_pct" not in light  # not set in HA attributes
+
+
+@pytest.mark.asyncio
+async def test_states_view_omits_brightness_for_non_light(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
+    """States endpoint does not include brightness attrs for non-light entities."""
+    domain_data = _build_domain_data()
+    token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
+    domain_data["entry-1"][CONF_STATES_RATE_LIMIT_PER_MIN] = 60
+    token, _payload = token_manager.create_guest_token(
+        guest_id="guest-states-switch",
+        entities=[
+            {
+                "entity_id": "switch.porch",
+                "allowed_actions": ["switch.on", "switch.off"],
+            },
+        ],
+        expires_at=now_ts + 600,
+        token_version=1,
+        now_timestamp=now_ts,
+    )
+
+    fake_states = {
+        "switch.porch": _FakeState(
+            state="off",
+            attributes={"friendly_name": "Porch Switch"},
+        ),
+    }
+    hass = _FakeHassWithStates(domain_data, states=fake_states)
+
+    async def _fake_use_count(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 0
+
+    async def _fake_is_revoked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return False
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _fake_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
+
+    request = _FakeRequest(
+        hass=hass,
+        headers={"Authorization": f"Bearer {token}"},
+        path="/api/easy_control/states",
+        method="GET",
+    )
+    response = await GuestAccessEntityStatesView().get(request)
+    body = _json_body(response)
+
+    assert response.status == 200
+    switch = body["entities"][0]
+    assert "brightness" not in switch
+    assert "supported_color_modes" not in switch

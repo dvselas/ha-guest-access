@@ -67,6 +67,7 @@ ALLOWED_ACTIONS = (
     "switch.off",
     "light.on",
     "light.off",
+    "light.set_brightness",
     # Read-only
     "climate.read",
     "sensor.read",
@@ -83,7 +84,7 @@ DOMAIN_ACTION_MAP: dict[str, list[str]] = {
     "lock": ["door.lock", "door.unlock"],
     "cover": ["garage.open", "garage.close"],
     "switch": ["switch.on", "switch.off"],
-    "light": ["light.on", "light.off"],
+    "light": ["light.on", "light.off", "light.set_brightness"],
     "climate": ["climate.read"],
     "sensor": ["sensor.read"],
     "binary_sensor": ["binary_sensor.read"],
@@ -99,6 +100,7 @@ ACTION_SERVICE_MAP: dict[str, tuple[str, str]] = {
     "switch.off": ("switch", "turn_off"),
     "light.on": ("light", "turn_on"),
     "light.off": ("light", "turn_off"),
+    "light.set_brightness": ("light", "turn_on"),
     # Legacy (backward compat with old tokens)
     "door.open": ("lock", "unlock"),
     "switch.toggle": ("switch", "toggle"),

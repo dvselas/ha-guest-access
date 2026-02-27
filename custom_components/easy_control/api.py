@@ -721,11 +721,17 @@ class GuestAccessActionView(HomeAssistantView):
             )
 
         service_domain, service_name = service_target
+        service_data: dict[str, Any] = {"entity_id": entity_id}
+        if action == "light.set_brightness":
+            brightness_pct = payload.get("brightness_pct")
+            if brightness_pct is not None:
+                brightness_pct = max(0, min(100, int(brightness_pct)))
+                service_data["brightness_pct"] = brightness_pct
         try:
             await hass.services.async_call(
                 service_domain,
                 service_name,
-                {"entity_id": entity_id},
+                service_data,
                 blocking=True,
             )
         except HomeAssistantError as err:
@@ -1056,6 +1062,19 @@ class GuestAccessEntityStatesView(HomeAssistantView):
                 device_class = state_obj.attributes.get("device_class")
                 if device_class:
                     entry["device_class"] = device_class
+                if domain == "light":
+                    brightness = state_obj.attributes.get("brightness")
+                    if brightness is not None:
+                        entry["brightness"] = brightness
+                    brightness_pct = state_obj.attributes.get("brightness_pct")
+                    if brightness_pct is not None:
+                        entry["brightness_pct"] = brightness_pct
+                    scm = state_obj.attributes.get("supported_color_modes")
+                    if scm:
+                        entry["supported_color_modes"] = scm
+                    sf = state_obj.attributes.get("supported_features")
+                    if sf:
+                        entry["supported_features"] = sf
             entity_states.append(entry)
 
         return self.json({"entities": entity_states})
