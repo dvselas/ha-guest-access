@@ -1,6 +1,6 @@
 # HA Easy Control
 
-Give guests scoped, time-limited access to your smart home — no Home Assistant account needed.
+Give guests, family and friends scoped, time-limited access to your smart home — no Home Assistant account needed.
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blue.svg)](https://www.home-assistant.io)
