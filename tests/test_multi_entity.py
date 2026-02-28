@@ -344,6 +344,13 @@ def test_bidirectional_light_actions() -> None:
     assert "light" not in READ_ONLY_DOMAINS
 
 
+def test_climate_actions() -> None:
+    """Climate domain has read and set_temperature actions."""
+    assert DOMAIN_ACTION_MAP["climate"] == ["climate.read", "climate.set_temperature"]
+    assert ACTION_SERVICE_MAP["climate.set_temperature"] == ("climate", "set_temperature")
+    assert "climate" not in READ_ONLY_DOMAINS
+
+
 def test_legacy_actions_in_service_map() -> None:
     """Legacy actions remain in ACTION_SERVICE_MAP for backward compat."""
     assert ACTION_SERVICE_MAP["door.open"] == ("lock", "unlock")

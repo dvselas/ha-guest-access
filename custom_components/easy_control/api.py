@@ -727,6 +727,11 @@ class GuestAccessActionView(HomeAssistantView):
             if brightness_pct is not None:
                 brightness_pct = max(0, min(100, int(brightness_pct)))
                 service_data["brightness_pct"] = brightness_pct
+        if action == "climate.set_temperature":
+            temperature = payload.get("temperature")
+            if temperature is not None:
+                temperature = round(float(temperature), 1)
+                service_data["temperature"] = temperature
         try:
             await hass.services.async_call(
                 service_domain,
@@ -1075,6 +1080,19 @@ class GuestAccessEntityStatesView(HomeAssistantView):
                     sf = state_obj.attributes.get("supported_features")
                     if sf:
                         entry["supported_features"] = sf
+                if domain == "climate":
+                    for attr in (
+                        "current_temperature",
+                        "temperature",
+                        "hvac_modes",
+                        "hvac_action",
+                        "min_temp",
+                        "max_temp",
+                        "target_temp_step",
+                    ):
+                        val = state_obj.attributes.get(attr)
+                        if val is not None:
+                            entry[attr] = val
             entity_states.append(entry)
 
         return self.json({"entities": entity_states})

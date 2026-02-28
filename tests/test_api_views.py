@@ -1033,3 +1033,218 @@ async def test_states_view_omits_brightness_for_non_light(
     switch = body["entities"][0]
     assert "brightness" not in switch
     assert "supported_color_modes" not in switch
+
+
+# ---------------------------------------------------------------------------
+# Climate: climate.set_temperature action
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_climate_set_temperature_passes_temperature(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
+    """climate.set_temperature passes temperature to climate.set_temperature service."""
+    domain_data = _build_domain_data()
+    token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
+    token, _payload = token_manager.create_guest_token(
+        guest_id="guest-climate",
+        entities=[
+            {
+                "entity_id": "climate.living_room",
+                "allowed_actions": ["climate.read", "climate.set_temperature"],
+            },
+        ],
+        expires_at=now_ts + 600,
+        token_version=1,
+        now_timestamp=now_ts,
+    )
+    hass = _FakeHass(domain_data)
+
+    async def _fake_use_count(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 0
+
+    async def _fake_is_revoked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return False
+
+    async def _fake_record_use(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 1
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _fake_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_record_token_use",
+        _fake_record_use,
+    )
+
+    request = _FakeRequest(
+        hass=hass,
+        headers={"Authorization": f"Bearer {token}"},
+        json_payload={
+            "action": "climate.set_temperature",
+            "entity_id": "climate.living_room",
+            "temperature": 22.5,
+        },
+        path="/api/easy_control/action",
+    )
+    response = await GuestAccessActionView().post(request)
+    body = _json_body(response)
+
+    assert response.status == 200
+    assert body["success"] is True
+    assert body["action"] == "climate.set_temperature"
+    assert len(hass.services.calls) == 1
+    domain, service, data = hass.services.calls[0]
+    assert domain == "climate"
+    assert service == "set_temperature"
+    assert data == {"entity_id": "climate.living_room", "temperature": 22.5}
+
+
+@pytest.mark.asyncio
+async def test_climate_set_temperature_without_temp_omits_it(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
+    """climate.set_temperature without temperature only passes entity_id."""
+    domain_data = _build_domain_data()
+    token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
+    token, _payload = token_manager.create_guest_token(
+        guest_id="guest-climate-no-temp",
+        entities=[
+            {
+                "entity_id": "climate.living_room",
+                "allowed_actions": ["climate.set_temperature"],
+            },
+        ],
+        expires_at=now_ts + 600,
+        token_version=1,
+        now_timestamp=now_ts,
+    )
+    hass = _FakeHass(domain_data)
+
+    async def _fake_use_count(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 0
+
+    async def _fake_is_revoked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return False
+
+    async def _fake_record_use(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 1
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _fake_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_record_token_use",
+        _fake_record_use,
+    )
+
+    request = _FakeRequest(
+        hass=hass,
+        headers={"Authorization": f"Bearer {token}"},
+        json_payload={
+            "action": "climate.set_temperature",
+            "entity_id": "climate.living_room",
+        },
+        path="/api/easy_control/action",
+    )
+    response = await GuestAccessActionView().post(request)
+    assert response.status == 200
+    _, _, data = hass.services.calls[0]
+    assert data == {"entity_id": "climate.living_room"}
+
+
+@pytest.mark.asyncio
+async def test_states_view_returns_climate_attributes(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
+    """States endpoint includes climate-specific attributes."""
+    domain_data = _build_domain_data()
+    token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
+    domain_data["entry-1"][CONF_STATES_RATE_LIMIT_PER_MIN] = 60
+    token, _payload = token_manager.create_guest_token(
+        guest_id="guest-states-climate",
+        entities=[
+            {
+                "entity_id": "climate.living_room",
+                "allowed_actions": ["climate.read", "climate.set_temperature"],
+            },
+        ],
+        expires_at=now_ts + 600,
+        token_version=1,
+        now_timestamp=now_ts,
+    )
+
+    fake_states = {
+        "climate.living_room": _FakeState(
+            state="heat",
+            attributes={
+                "friendly_name": "Living Room",
+                "current_temperature": 21.5,
+                "temperature": 23.0,
+                "hvac_modes": ["off", "heat", "cool", "heat_cool"],
+                "hvac_action": "heating",
+                "min_temp": 7,
+                "max_temp": 35,
+                "target_temp_step": 0.5,
+            },
+        ),
+    }
+    hass = _FakeHassWithStates(domain_data, states=fake_states)
+
+    async def _fake_use_count(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 0
+
+    async def _fake_is_revoked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return False
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _fake_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
+
+    request = _FakeRequest(
+        hass=hass,
+        headers={"Authorization": f"Bearer {token}"},
+        path="/api/easy_control/states",
+        method="GET",
+    )
+    response = await GuestAccessEntityStatesView().get(request)
+    body = _json_body(response)
+
+    assert response.status == 200
+    climate = body["entities"][0]
+    assert climate["entity_id"] == "climate.living_room"
+    assert climate["state"] == "heat"
+    assert climate["current_temperature"] == 21.5
+    assert climate["temperature"] == 23.0
+    assert climate["hvac_modes"] == ["off", "heat", "cool", "heat_cool"]
+    assert climate["hvac_action"] == "heating"
+    assert climate["min_temp"] == 7
+    assert climate["max_temp"] == 35
+    assert climate["target_temp_step"] == 0.5
