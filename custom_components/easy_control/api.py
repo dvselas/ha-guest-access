@@ -732,6 +732,16 @@ class GuestAccessActionView(HomeAssistantView):
             if temperature is not None:
                 temperature = round(float(temperature), 1)
                 service_data["temperature"] = temperature
+        if action == "garage.set_position":
+            position_pct = payload.get("position_pct")
+            if position_pct is not None:
+                position_pct = max(0, min(100, int(position_pct)))
+                service_data["position"] = position_pct
+        if action == "garage.set_tilt":
+            tilt_pct = payload.get("tilt_pct")
+            if tilt_pct is not None:
+                tilt_pct = max(0, min(100, int(tilt_pct)))
+                service_data["tilt_position"] = tilt_pct
         try:
             await hass.services.async_call(
                 service_domain,
@@ -1089,6 +1099,15 @@ class GuestAccessEntityStatesView(HomeAssistantView):
                         "min_temp",
                         "max_temp",
                         "target_temp_step",
+                    ):
+                        val = state_obj.attributes.get(attr)
+                        if val is not None:
+                            entry[attr] = val
+                if domain == "cover":
+                    for attr in (
+                        "current_position",
+                        "current_tilt_position",
+                        "supported_features",
                     ):
                         val = state_obj.attributes.get(attr)
                         if val is not None:

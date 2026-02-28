@@ -322,10 +322,17 @@ def test_bidirectional_lock_actions() -> None:
 
 
 def test_bidirectional_cover_actions() -> None:
-    """Cover domain has open and close actions."""
-    assert DOMAIN_ACTION_MAP["cover"] == ["garage.open", "garage.close"]
+    """Cover domain has open, close, set_position, and set_tilt actions."""
+    assert DOMAIN_ACTION_MAP["cover"] == [
+        "garage.open",
+        "garage.close",
+        "garage.set_position",
+        "garage.set_tilt",
+    ]
     assert ACTION_SERVICE_MAP["garage.open"] == ("cover", "open_cover")
     assert ACTION_SERVICE_MAP["garage.close"] == ("cover", "close_cover")
+    assert ACTION_SERVICE_MAP["garage.set_position"] == ("cover", "set_cover_position")
+    assert ACTION_SERVICE_MAP["garage.set_tilt"] == ("cover", "set_cover_tilt_position")
 
 
 def test_bidirectional_switch_actions() -> None:

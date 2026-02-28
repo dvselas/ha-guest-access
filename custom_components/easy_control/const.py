@@ -63,6 +63,8 @@ ALLOWED_ACTIONS = (
     "door.unlock",
     "garage.open",
     "garage.close",
+    "garage.set_position",
+    "garage.set_tilt",
     "switch.on",
     "switch.off",
     "light.on",
@@ -83,7 +85,7 @@ READ_ONLY_DOMAINS = frozenset({"sensor", "binary_sensor"})
 # Maps entity domain → default allowed actions (auto-inferred, not user-specified).
 DOMAIN_ACTION_MAP: dict[str, list[str]] = {
     "lock": ["door.lock", "door.unlock"],
-    "cover": ["garage.open", "garage.close"],
+    "cover": ["garage.open", "garage.close", "garage.set_position", "garage.set_tilt"],
     "switch": ["switch.on", "switch.off"],
     "light": ["light.on", "light.off", "light.set_brightness"],
     "climate": ["climate.read", "climate.set_temperature"],
@@ -97,6 +99,8 @@ ACTION_SERVICE_MAP: dict[str, tuple[str, str]] = {
     "door.unlock": ("lock", "unlock"),
     "garage.open": ("cover", "open_cover"),
     "garage.close": ("cover", "close_cover"),
+    "garage.set_position": ("cover", "set_cover_position"),
+    "garage.set_tilt": ("cover", "set_cover_tilt_position"),
     "switch.on": ("switch", "turn_on"),
     "switch.off": ("switch", "turn_off"),
     "light.on": ("light", "turn_on"),

@@ -1248,3 +1248,228 @@ async def test_states_view_returns_climate_attributes(
     assert climate["min_temp"] == 7
     assert climate["max_temp"] == 35
     assert climate["target_temp_step"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_set_position_passes_position_pct(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
+    """garage.set_position passes position to cover.set_cover_position service."""
+    domain_data = _build_domain_data()
+    token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
+    token, _payload = token_manager.create_guest_token(
+        guest_id="guest-cover-pos",
+        entities=[
+            {
+                "entity_id": "cover.shade",
+                "allowed_actions": [
+                    "garage.open",
+                    "garage.close",
+                    "garage.set_position",
+                    "garage.set_tilt",
+                ],
+            },
+        ],
+        expires_at=now_ts + 600,
+        token_version=1,
+        now_timestamp=now_ts,
+    )
+    hass = _FakeHass(domain_data)
+
+    async def _fake_use_count(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 0
+
+    async def _fake_is_revoked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return False
+
+    async def _fake_record_use(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 1
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _fake_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_record_token_use",
+        _fake_record_use,
+    )
+
+    request = _FakeRequest(
+        hass=hass,
+        headers={"Authorization": f"Bearer {token}"},
+        json_payload={
+            "action": "garage.set_position",
+            "entity_id": "cover.shade",
+            "position_pct": 42,
+        },
+        path="/api/easy_control/action",
+    )
+    response = await GuestAccessActionView().post(request)
+    body = _json_body(response)
+
+    assert response.status == 200
+    assert body["success"] is True
+    assert body["action"] == "garage.set_position"
+    assert len(hass.services.calls) == 1
+    domain, service, data = hass.services.calls[0]
+    assert domain == "cover"
+    assert service == "set_cover_position"
+    assert data == {"entity_id": "cover.shade", "position": 42}
+
+
+@pytest.mark.asyncio
+async def test_set_tilt_passes_tilt_pct(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
+    """garage.set_tilt passes tilt_position to cover.set_cover_tilt_position service."""
+    domain_data = _build_domain_data()
+    token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
+    token, _payload = token_manager.create_guest_token(
+        guest_id="guest-cover-tilt",
+        entities=[
+            {
+                "entity_id": "cover.shade",
+                "allowed_actions": [
+                    "garage.open",
+                    "garage.close",
+                    "garage.set_position",
+                    "garage.set_tilt",
+                ],
+            },
+        ],
+        expires_at=now_ts + 600,
+        token_version=1,
+        now_timestamp=now_ts,
+    )
+    hass = _FakeHass(domain_data)
+
+    async def _fake_use_count(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 0
+
+    async def _fake_is_revoked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return False
+
+    async def _fake_record_use(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 1
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _fake_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_record_token_use",
+        _fake_record_use,
+    )
+
+    request = _FakeRequest(
+        hass=hass,
+        headers={"Authorization": f"Bearer {token}"},
+        json_payload={
+            "action": "garage.set_tilt",
+            "entity_id": "cover.shade",
+            "tilt_pct": 75,
+        },
+        path="/api/easy_control/action",
+    )
+    response = await GuestAccessActionView().post(request)
+    body = _json_body(response)
+
+    assert response.status == 200
+    assert body["success"] is True
+    assert body["action"] == "garage.set_tilt"
+    assert len(hass.services.calls) == 1
+    domain, service, data = hass.services.calls[0]
+    assert domain == "cover"
+    assert service == "set_cover_tilt_position"
+    assert data == {"entity_id": "cover.shade", "tilt_position": 75}
+
+
+@pytest.mark.asyncio
+async def test_states_view_returns_cover_attributes(
+    monkeypatch: pytest.MonkeyPatch,
+    now_ts: int,
+) -> None:
+    """States endpoint includes cover-specific attributes."""
+    domain_data = _build_domain_data()
+    token_manager: GuestTokenManager = domain_data["entry-1"][DATA_TOKEN_MANAGER]
+    domain_data["entry-1"][CONF_STATES_RATE_LIMIT_PER_MIN] = 60
+    token, _payload = token_manager.create_guest_token(
+        guest_id="guest-states-cover",
+        entities=[
+            {
+                "entity_id": "cover.shade",
+                "allowed_actions": [
+                    "garage.open",
+                    "garage.close",
+                    "garage.set_position",
+                    "garage.set_tilt",
+                ],
+            },
+        ],
+        expires_at=now_ts + 600,
+        token_version=1,
+        now_timestamp=now_ts,
+    )
+
+    fake_states = {
+        "cover.shade": _FakeState(
+            state="open",
+            attributes={
+                "friendly_name": "Living Room Shade",
+                "current_position": 65,
+                "current_tilt_position": 30,
+                "supported_features": 255,
+            },
+        ),
+    }
+    hass = _FakeHassWithStates(domain_data, states=fake_states)
+
+    async def _fake_use_count(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return 0
+
+    async def _fake_is_revoked(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return False
+
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_get_token_use_count",
+        _fake_use_count,
+    )
+    monkeypatch.setattr(
+        "custom_components.easy_control.api.async_is_token_revoked",
+        _fake_is_revoked,
+    )
+
+    request = _FakeRequest(
+        hass=hass,
+        headers={"Authorization": f"Bearer {token}"},
+        path="/api/easy_control/states",
+        method="GET",
+    )
+    response = await GuestAccessEntityStatesView().get(request)
+    body = _json_body(response)
+
+    assert response.status == 200
+    cover = body["entities"][0]
+    assert cover["entity_id"] == "cover.shade"
+    assert cover["state"] == "open"
+    assert cover["current_position"] == 65
+    assert cover["current_tilt_position"] == 30
+    assert cover["supported_features"] == 255
